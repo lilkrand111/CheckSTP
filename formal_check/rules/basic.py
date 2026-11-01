@@ -105,8 +105,7 @@ def paragraph_spacing(model, report):
         value, mode = p.props["line"], p.props["lineRule"]
         if (value, mode) != SINGLE_LINE:
             report.add(p, spacing(value, mode),
-                       "В настройках абзаца установите одинарный межстрочный интервал (1,0). "
-                       "Это требование действует по согласованному исключению заказчика от 21.10.2026.",
+                       "В настройках абзаца установите одинарный межстрочный интервал (1,0).",
                        prop="line_spacing",
                        diagnostic=Diagnostic("paragraph_line_spacing", p, "line_spacing",
                                              (value, mode), SINGLE_LINE))
@@ -164,7 +163,7 @@ def heading_numbers(model, report):
 
 def check_subsection_layout(model, p, report):
     desired = subsection_layout.target(model, p)
-    expected = ("По дополнению заказчика от 22.10.2026 задайте выступ и табуляцию после номера: "
+    expected = ("Задайте выступ и табуляцию после номера: "
                 "номер начинается с 1,25 см, а продолжение заголовка — под началом его текста. "
                 "Не выравнивайте продолжение пробелами.")
     if desired is None:

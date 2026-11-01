@@ -1,5 +1,5 @@
 import { DocumentStore, isBusy, isFixing, defaultFilters } from './documents.mjs';
-import { $, element, notice, renderReport, renderCoverage } from './views.mjs?v=20261031';
+import { $, element, notice, renderReport } from './views.mjs?v=20261101.3';
 
 let storage;
 try { storage = window.localStorage; } catch { storage = null; }
@@ -59,6 +59,7 @@ function render() {
   const entry = current(), data = entry?.data;
   $('landing').hidden = mode !== 'landing'; $('application').hidden = mode === 'landing';
   $('application').classList.toggle('report-visible', mode === 'report' && Boolean(data?.report));
+  $('application').classList.remove('report-empty', 'report-clean');
   $('upload-screen').hidden = mode !== 'upload'; $('workspace').hidden = mode !== 'report';
   $('new-document').hidden = mode !== 'report'; $('standard-badge').hidden = mode === 'report';
   $('app-context').textContent = mode === 'report' && entry ? `${entry.filename} / СТП 01–2017` : 'Проверка оформления';
@@ -73,11 +74,6 @@ function render() {
   $('upload-label').textContent = selectedFile ? 'Сменить файл' : 'Выбрать DOCX';
   $('upload-subtitle').textContent = selectedFile ? 'Выберите другой DOCX или перетащите его сюда' : 'или перетащите документ сюда';
   $('start-check').disabled = !selectedFile || Boolean(store.validate(selectedFile)) || Boolean(store.admissionError());
-  const entries = [...store.documents.values()];
-  $('document-switcher').hidden = !entries.length || (entries.length === 1 && mode === 'report');
-  const placeholder = element('option', '', 'Открыть документ'); placeholder.value = '';
-  $('document-select').replaceChildren(placeholder, ...entries.map(item => { const option = element('option', '', item.filename + (isBusy(item) ? ' · обработка' : item.error ? ' · ошибка' : '')); option.value = item.key; return option; }));
-  $('document-select').value = selectedKey || '';
   if (!entry || mode !== 'report') return;
   if (data?.document_id && new URL(location.href).searchParams.get('document') !== data.document_id) {
     const url = new URL(location.href); url.hash = ''; url.searchParams.set('document', data.document_id); history.replaceState(null, '', url);
@@ -108,9 +104,15 @@ function render() {
   $('download').textContent = entry.downloading ? 'Получаем файл…' : 'Скачать исправленную копию';
   $('download-note').textContent = data.download_url ? 'Копия готова. Оставшиеся замечания не мешают скачиванию.' : 'Доступно после повторной проверки. Оставшиеся замечания не мешают скачиванию.';
   $('download-status').textContent = entry.downloaded ? '✓ Скачивание началось' : '';
-  renderReport(entry, { mobile: mobile.matches, onSelect: index => { entry.selectedFinding = index; render(); }, onMark: (index, checked) => store.mark(entry, index, checked) });
-  const coverageKey = JSON.stringify([entry.key, data.warnings, data.limitations]);
-  if ($('coverage')._key !== coverageKey) { renderCoverage(data); $('coverage')._key = coverageKey; }
+  const { visible } = renderReport(entry, { mobile: mobile.matches, onSelect: index => { entry.selectedFinding = index; render(); }, onMark: (index, checked) => store.mark(entry, index, checked) });
+  // Empty list states follow frames 06 and 07: compact header, no heading or counters, centred actions panel.
+  const empty = !visible.length, clean = !report.findings.length && !corrected && !busy;
+  $('application').classList.toggle('report-empty', empty); $('application').classList.toggle('report-clean', empty && clean);
+  $('document-actions').hidden = empty && clean;
+  if (empty && !corrected && !busy && !entry.error) {
+    $('action-note').textContent = 'Исходный файл не меняется';
+    $('download-note').textContent = 'Доступно после повторной проверки';
+  }
 }
 async function download() {
   const entry = current();
@@ -130,7 +132,6 @@ $('file-input').addEventListener('change', event => { choose(event.target.files[
 $('start-check').addEventListener('click', () => start());
 $('retry-upload').addEventListener('click', () => start(current()?.file));
 $('session-retry').addEventListener('click', async () => { if (await store.connect()) await restoreRoute(); });
-$('document-select').addEventListener('change', event => { const entry = store.documents.get(event.target.value); if (entry) navigate('report', entry); });
 $('fix').addEventListener('click', () => store.fix(current())); $('download').addEventListener('click', download);
 $('refresh').addEventListener('click', () => store.refresh(current()));
 $('search').addEventListener('input', event => { if (current()) { current().filters.query = event.target.value; render(); } });
@@ -140,7 +141,6 @@ $('status').addEventListener('change', event => { if (current()) { current().fil
 $('hide-done').addEventListener('change', event => { if (current()) { current().filters.hideDone = event.target.checked; render(); } });
 $('reset-filters').addEventListener('click', resetFilters);
 $('empty-action').addEventListener('click', () => { if ($('empty-action').dataset.action === 'show' && current()) { current().filters.hideDone = false; render(); } else resetFilters(); $('search').focus(); });
-$('show-coverage').addEventListener('click', () => { $('coverage').open = true; $('coverage').querySelector('summary').focus(); $('coverage').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); });
 for (const id of ['upload-zone', 'hero']) {
   const zone = $(id); let depth = 0;
   zone.addEventListener('dragenter', event => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); depth++; zone.classList.add('dragging'); });

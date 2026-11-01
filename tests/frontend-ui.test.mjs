@@ -162,7 +162,7 @@ test('actual app separates file choice from POST, preserves the selected documen
     location.href = 'http://localhost/'; await events.get('popstate')();
     pending.resolve(uploaded); for (let i = 0; i < 15; i++) await setImmediate();
     assert.equal(get('landing').hidden, false); assert.equal(location.href, 'http://localhost/');
-    await get('document-select').fire('change', { target: { value: 'upload-1' } });
+    location.href = `http://localhost/?document=${uploaded.document_id}`; await events.get('popstate')(); for (let i = 0; i < 15; i++) await setImmediate();
     assert.equal(get('report').hidden, false); assert.equal(get('count-all').textContent, 2);
     assert.equal(new URL(location.href).searchParams.get('document'), uploaded.document_id);
     get('finding-detail').scrollTop = 120;
@@ -173,6 +173,8 @@ test('actual app separates file choice from POST, preserves the selected documen
     assert.equal(get('finding-detail').scrollTop, 0);
     await get('search').fire('input', { target: { value: 'неизвестный фрагмент' } });
     assert.equal(get('empty-title').textContent, 'Ничего не найдено по условиям');
+    assert.equal(get('empty-text').textContent, 'Поиск «неизвестный фрагмент» применён. Измените условие или сбросьте его.');
+    assert.equal(get('empty-summary').textContent, 'Исходный отчёт: 2 замечания · 1 ошибка · 1 ручная проверка · 0 рекомендаций');
     await get('reset-filters').fire('click'); assert.equal(get('empty').hidden, true);
     location.href = `http://localhost/?document=${uploaded.document_id}`; await events.get('popstate')();
     assert.equal(requests.at(-1).path, `/api/documents/${uploaded.document_id}`);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { filteredFindings, markStorageKey, parseMarks, readResponse, retryDelay, operationErrorMessage } from "../frontend/assets/report.mjs";
 
 const findings = [
-  { rule_id: "F03", status: "error", actual: "Интервал — 1,5", expected: "Интервал 1,0", standard_reference: "Уточнение заказчика", locations: [{ section: "Введение", fragment_start: "Система\tпроверяет\nдокумент", property: "line_spacing" }] },
+  { rule_id: "F03", status: "error", actual: "Интервал — 1,5", expected: "Интервал 1,0", standard_reference: "2.1.1, приложение Л", locations: [{ section: "Введение", fragment_start: "Система\tпроверяет\nдокумент", property: "line_spacing" }] },
   { rule_id: "F22", status: "review", actual: "Проверьте рисунок", expected: "Проверьте подпись", standard_reference: "2.5.5", locations: [{ section: "", context: "Рисунок 1", property: "unknown_property" }] },
   { rule_id: "F02", status: "recommendation", actual: "Размер заголовка", expected: "Уточните размер", standard_reference: "2.1.1", locations: [] },
 ];
