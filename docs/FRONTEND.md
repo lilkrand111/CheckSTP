@@ -179,7 +179,7 @@ type DocumentResponse = {
   "current_version": "original",
   "created_at": "2026-10-24T10:00:00+00:00",
   "expires_at": null,
-  "checker_version": "0.3.6",
+  "checker_version": "0.3.7",
   "ruleset_version": "stp-01-2017-2026-11-06",
   "last_error": null,
   "report": {

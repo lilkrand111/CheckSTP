@@ -72,7 +72,9 @@ def prepare_locations(model):
         before, after = previous.get(key), following[p.index]
         p.location_fragment = _math_text(model, p) if p.math else ''
         p.location_context = ''
-        if p.math or not any(c.isalpha() for c in p.text):
+        # A paragraph with its own searchable text needs no positional hint,
+        # even when it also holds an inline formula (e.g. a caption).
+        if not anchors[p.index] and (p.math or not any(c.isalpha() for c in p.text)):
             label = ('Формула' if p.math else 'Изображение' if p.images else
                      'Пустой абзац' if not p.text.strip() else 'Абзац')
             group = key, label, before.index if before is not None else None

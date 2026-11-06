@@ -109,7 +109,7 @@ def classify(model):
                 elif CODE.match(text) or re.search(r"\b(code|код|listing|листинг)\b", style):
                     p.kind = "code"
                 elif xp(p.xml, ".//m:oMathPara") or (
-                        (p.math or re.search(r"[=∫∑√]", text)) and
+                        (p.math or re.search(r"[=≈≠≤≥≡∫∑∏√]", text)) and
                         len(re.findall(r"[а-яё]{2,}", text, re.I)) < 4):
                     p.kind = "formula"
                 elif re.match(r"^\s*(?:где\b|Здесь\b|В формуле обозначено\b)", text, re.I):
@@ -169,6 +169,7 @@ def classify(model):
             else:
                 p.kind = "appendix_title"
                 break
+    mark_caption_continuations(body)
     in_notes = False
     for p in body:
         if re.fullmatch(r"\s*Примечания\s*", p.text, re.I):
@@ -205,3 +206,27 @@ def classify(model):
                     p.kind = "code"
     prepare_locations(model)
     return model
+
+
+FIGURE_CAPTION = re.compile(r"^\s*(?:Рисунок|Рис\.)\s+\S", re.I)
+
+
+def mark_caption_continuations(body):
+    """A figure caption typed as two paragraphs: the second one is not prose.
+
+    Only an unfinished caption followed directly by a short centered paragraph
+    that starts with a lowercase letter qualifies, e.g. «Рисунок 2.3 –
+    Графическая» + «интерпретация метода Ньютона».
+    """
+    for caption, following in zip(body, body[1:]):
+        if caption.kind != "caption" or not FIGURE_CAPTION.match(caption.text):
+            continue
+        text = following.text.strip()
+        first = next((c for c in text if c.isalpha()), "")
+        if (following.kind == "text" and following.region == caption.region and
+                following.xml.getprevious() is caption.xml and
+                not caption.text.rstrip().endswith((".", "!", "?")) and
+                first.islower() and len(text) <= 150 and not text.endswith(".") and
+                not following.images and not following.math and
+                following.props.get("alignment") == "center"):
+            following.kind = "caption_continuation"

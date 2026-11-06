@@ -1,6 +1,6 @@
 """F22: the customer-requested blank line between a figure and its caption."""
 from .common import LOG
-from .headings import blank_details, edge_details, sentence
+from .headings import blank_details, edge_details, empty_paragraphs, sentence
 from ..constraints import BLANK_LINE_SPACING
 from ..formatting import blank_line_spacing_values, paragraph_edge_spacing_values
 from ..model import Diagnostic
@@ -167,5 +167,9 @@ def check_figure_gap(model, caption, report):
     if not blank_lines and not (spaced or lines or automatic):
         report.add(caption, "Между рисунком и подписью нет пустой строки.",
                    EXPECTED, prop="figure_caption_gap")
+    elif (blank_lines >= 2 and len(blanks) == blank_lines and line_units_known and
+          not (spaced or lines or automatic or extra)):
+        report.add(caption, f"Между рисунком и подписью {empty_paragraphs(blank_lines)}.",
+                   "Оставьте один пустой абзац.", "review", prop="figure_caption_gap")
     else:
         review(f"Промежуток между рисунком и подписью задан нестандартно: пустых строк {blank_lines}.")

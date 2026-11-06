@@ -123,6 +123,11 @@ def numbering_check(items, report, label, allow_continuations=False, gap_status=
     """Items: (paragraph, number string, continuation bool). Supports two schemes."""
     seen, counters, modes = {}, {}, {}
     plural = {"формулы": "формул", "рисунка": "рисунков", "таблицы": "таблиц"}[label]
+    nominative, accusative = {"формулы": ("формула", "формулы"), "рисунка": ("рисунок", "рисунки"),
+                              "таблицы": ("таблица", "таблицы")}[label]
+
+    def shown(value):
+        return f"({value})" if label == "формулы" else value
     for p, number, continuation in items:
         if continuation and allow_continuations:
             if (p.appendix, number) not in seen:
@@ -131,8 +136,8 @@ def numbering_check(items, report, label, allow_continuations=False, gap_status=
             continue
         key = (p.appendix, number)
         if key in seen:
-            report.add([seen[key], p], f"Номер {label} {number} указан повторно.",
-                       f"Исправьте повторяющиеся номера {plural}: у каждого элемента должен быть свой номер.")
+            report.add([seen[key], p], f"Номер {label} {shown(number)} встречается дважды.",
+                       f"Перенумеруйте {accusative} по порядку.")
             continue
         seen[key] = p
         parts = number.split(".")
@@ -150,11 +155,16 @@ def numbering_check(items, report, label, allow_continuations=False, gap_status=
         n = int(parts[-1])
         expected = counters.get(counter_key, 0) + 1
         if n != expected:
-            report.add(p, f"После предыдущих элементов указан номер {number}.",
-                       (f"Проверьте, нет ли между формулами пропущенного номера. "
-                        f"Если других формул нет, следующим должен быть номер {'.'.join(parts[:-1] + [str(expected)])}."
-                        if gap_status == "review" else
-                        f"Исправьте номер: следующим по порядку должен быть {'.'.join(parts[:-1] + [str(expected)])}."),
+            wanted = shown(".".join(parts[:-1] + [str(expected)]))
+            if counter_key in counters:
+                previous = shown(".".join(parts[:-1] + [str(counters[counter_key])]))
+                fact = f"После {label} {previous} идёт {nominative} {shown(number)}."
+            else:
+                fact = f"Нумерация {plural} начинается с номера {shown(number)}."
+            report.add(p, fact,
+                       (f"Проверьте нумерацию: следующей должна быть формула {wanted}. "
+                        "Если формулы с пропущенными номерами вставлены картинками, сверьте их номера вручную."
+                        if gap_status == "review" else f"Исправьте номер на {wanted}."),
                        gap_status)
         counters[counter_key] = n
         modes.setdefault(p.appendix, set()).add(len(parts))

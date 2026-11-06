@@ -246,10 +246,14 @@ def appendix_heading(model, report):
         status_text = rows[0][1] if rows else ""
         valid_status = re.fullmatch(r"\((?:обязательное|рекомендуемое|справочное)\)", status_text)
         if not valid_status:
-            report.add(app, "После обозначения приложения отсутствует строка статуса или статус записан неверно.",
-                       "Между обозначением и заголовком приложения добавьте отдельную строку со статусом: "
-                       "«(обязательное)», «(рекомендуемое)» или «(справочное)». "
-                       "Выберите подходящий статус и напишите его строчными буквами в скобках.")
+            choices = "«(обязательное)», «(рекомендуемое)» или «(справочное)»"
+            if re.fullmatch(r"\([^()]+\)", status_text):
+                report.add(app, f"Статус приложения записан неверно: «{rows[0][2]}».",
+                           f"Запишите статус строчными буквами в скобках: {choices}.")
+            else:
+                designation = (app.display_text.strip() or app.text.strip()).splitlines()[0].strip()
+                report.add(app, f"Под обозначением «{designation}» нет строки статуса.",
+                           f"Добавьте под обозначением строку {choices}.")
         else:
             if status is not app and status.props["alignment"] != "center":
                 report.add(status, "Строка статуса не выровнена по центру.", "Выровняйте статус по центру.")

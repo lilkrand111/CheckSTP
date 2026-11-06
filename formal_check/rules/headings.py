@@ -141,6 +141,14 @@ def blank_details(line, rule, before, after, before_lines, after_lines, before_a
     return details
 
 
+def empty_paragraphs(count):
+    """«21 пустой абзац», «2 пустых абзаца», «5 пустых абзацев»."""
+    if count % 10 == 1 and count % 100 != 11:
+        return f"{count} пустой абзац"
+    few = count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14)
+    return f"{count} пустых {'абзаца' if few else 'абзацев'}"
+
+
 def sentence(head, details):
     return head + (": " + ", ".join(details) if details else "") + "."
 
@@ -203,6 +211,15 @@ def check_heading_gap(model, p, report):
     if not blanks and not lines and not spaced and not automatic:
         report.add(p, "После заголовка нет пустой строки.", GAP_EXPECTED, prop="heading_gap")
     else:
+        edges = (edge_details(p.props.get("after", 0), p.props.get("afterLines", 0),
+                              p.props.get("afterAutospacing") in ("1", "true", "on"), "у заголовка", "после") +
+                 edge_details(next_p.props.get("before", 0), next_p.props.get("beforeLines", 0),
+                              next_p.props.get("beforeAutospacing") in ("1", "true", "on"),
+                              "у следующего абзаца", "перед"))
+        if len(blanks) >= 2 and not edges:
+            report.add(p, f"После заголовка {empty_paragraphs(len(blanks))}.", "Оставьте один пустой абзац.",
+                       "review", prop="heading_gap")
+            return
         details = [f"пустых абзацев {len(blanks)}"] if blanks else []
         details += edge_details(p.props.get("after", 0), p.props.get("afterLines", 0),
                                  p.props.get("afterAutospacing") in ("1", "true", "on"),

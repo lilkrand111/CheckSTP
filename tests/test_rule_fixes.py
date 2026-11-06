@@ -1,4 +1,4 @@
-"""Regression tests for F22 figure gaps and their fix, F10 page numbers and the F04 indent target."""
+"""Regression tests for F22 figures and captions, F10 page numbers, the F04 indent target and locations."""
 import base64
 from io import BytesIO
 
@@ -130,3 +130,49 @@ def test_first_line_fix_uses_prevailing_allowed_indent(tmp_path):
     targets = {d.expected for d in inspect_document(path).diagnostics
                if d.rule_id == "F04" and d.kind == "paragraph_first_line_indent"}
     assert targets == {720}
+
+
+M = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
+
+
+def test_two_paragraph_caption_is_not_checked_as_prose(tmp_path):
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    document = base_document()
+    picture(document)
+    blank(document)
+    first = caption(document, "Рисунок 1 – Графическая ")
+    first.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    second = document.add_paragraph("интерпретация метода Ньютона")
+    second.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    path = tmp_path / "caption.docx"
+    document.save(path)
+    model = inspect_document(path).model
+    assert next(p for p in model.paragraphs if p.text.startswith("интерпретация")).kind == "caption_continuation"
+    prose_rules = [f for f in check_document(path)["findings"] if f["rule_id"] in ("F03", "F04", "F06")
+                   and f["locations"][0].get("fragment_start", "").startswith("интерпретация")]
+    assert prose_rules == []
+
+
+def test_text_with_inline_formula_has_no_positional_context(tmp_path):
+    document = base_document()
+    picture(document)
+    paragraph = caption(document, "Рисунок 1 – Решение уравнения ")
+    paragraph._p.append(parse_xml(f'<m:oMath {M}><m:r><m:t>x=1</m:t></m:r></m:oMath>'))
+    path = tmp_path / "inline.docx"
+    document.save(path)
+    gap = next(f for f in check_document(path)["findings"]
+               if f["rule_id"] == "F22" and f["locations"][0].get("property") == "figure_caption_gap")
+    assert gap["locations"][0]["fragment_start"].startswith("Рисунок 1 – Решение уравнения")
+    assert "context" not in gap["locations"][0]
+
+
+def test_text_formula_with_approximately_equal_is_not_prose(tmp_path):
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    document = base_document()
+    formula = document.add_paragraph("f(x) ≈ f(x0) + f′(x0)(x − x0),")
+    formula.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    path = tmp_path / "approx.docx"
+    document.save(path)
+    assert next(p for p in inspect_document(path).model.paragraphs if p.text.startswith("f(x)")).kind == "formula"
+    assert not [f for f in check_document(path)["findings"] if f["rule_id"] in ("F03", "F04", "F06")
+                and f["locations"][0].get("fragment_start", "").startswith("f(x)")]

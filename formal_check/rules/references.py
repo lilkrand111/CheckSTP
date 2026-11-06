@@ -71,9 +71,15 @@ def citations(model, report):
     listed_cited = [n for n, _ in items if n in order]
     cited_existing = [n for n in order if n in sources]
     if listed_cited != cited_existing and listed_cited:
-        report.add([sources[n] for n in listed_cited],
-                   "Порядок источников в списке отличается от порядка первых ссылок.",
-                   "Расположите источники по первому появлению ссылок.")
+        # Name the first pair out of order instead of highlighting the whole list.
+        # Only repeated numbers may differ; F32 reports those separately.
+        position = next((i for i, (a, b) in enumerate(zip(cited_existing, listed_cited)) if a != b), None)
+        if position is not None:
+            early, late = cited_existing[position], listed_cited[position]
+            report.add([sources[late], sources[early]],
+                       f"Источник [{early}] упоминается в тексте раньше источника [{late}].",
+                       "Источники нумеруются в порядке первого упоминания в тексте. "
+                       f"Поставьте [{early}] в списке перед [{late}] и исправьте номера ссылок.")
     if model.bibliography and not items:
         LOG.warning("F32: номера источников не распознаны; полнота ссылок не проверена.")
 
