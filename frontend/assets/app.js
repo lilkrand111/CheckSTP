@@ -1,5 +1,5 @@
 import { DocumentStore, isBusy, isFixing, defaultFilters } from './documents.mjs';
-import { $, element, notice, renderReport } from './views.mjs?v=20261101.3';
+import { $, element, notice, renderReport } from './views.mjs?v=20261106.2';
 
 let storage;
 try { storage = window.localStorage; } catch { storage = null; }
@@ -11,6 +11,7 @@ let uploadError = '';
 let navigationSequence = 0;
 const mobile = window.matchMedia('(max-width: 650px)');
 const current = () => store.documents.get(selectedKey);
+const limitText = () => store.session ? `DOCX · до ${new Intl.NumberFormat('ru', { maximumFractionDigits: 1 }).format(store.session.max_upload_bytes / 1048576)} МБ` : 'DOCX';
 
 function navigate(view, entry = null, push = true) {
   navigationSequence++;
@@ -57,22 +58,25 @@ function start(file = selectedFile) {
 }
 function render() {
   const entry = current(), data = entry?.data;
+  const reportShown = mode === 'report' && Boolean(data?.report);
   $('landing').hidden = mode !== 'landing'; $('application').hidden = mode === 'landing';
-  $('application').classList.toggle('report-visible', mode === 'report' && Boolean(data?.report));
-  $('application').classList.remove('report-empty', 'report-clean');
+  $('application').classList.toggle('report-visible', reportShown);
+  $('application').classList.toggle('report-waiting', mode === 'report' && Boolean(entry) && !data?.report);
+  $('application').classList.remove('report-empty', 'report-clean', 'report-fixing');
   $('upload-screen').hidden = mode !== 'upload'; $('workspace').hidden = mode !== 'report';
-  $('new-document').hidden = mode !== 'report'; $('standard-badge').hidden = mode === 'report';
-  $('app-context').textContent = mode === 'report' && entry ? `${entry.filename} / СТП 01–2017` : 'Проверка оформления';
+  // Frames 00–02 show the standard badge; a ready report shows «Загрузить другой DOCX» instead.
+  $('new-document').hidden = !reportShown; $('standard-badge').hidden = reportShown;
   const selectionError = mode === 'upload' ? uploadError || (selectedFile ? store.validate(selectedFile) : '') : '';
   notice('global-message', selectionError || store.sessionError, true);
   $('session-retry').hidden = !store.sessionError;
   notice('pause-message', store.paused ? 'Новые загрузки и автоисправление временно приостановлены по ограничению сервера. После паузы повторите действие вручную. Просмотр и скачивание доступны.' : '');
   notice('busy-message', store.session && store.activeCount >= store.session.max_concurrent_jobs && !store.paused ? 'Обработчики заняты документами этой вкладки. Новую проверку или исправление можно запустить после завершения одной из операций. Просмотр отчётов доступен.' : '');
   $('file-input').disabled = false;
-  $('upload-limit').textContent = store.session ? `DOCX · до ${new Intl.NumberFormat('ru', { maximumFractionDigits: 1 }).format(store.session.max_upload_bytes / 1048576)} МБ` : 'DOCX · Лимит будет доступен после подключения';
+  $('upload-limit').textContent = store.session ? limitText() : 'DOCX · Лимит будет доступен после подключения';
+  $('upload-zone').classList.toggle('has-file', Boolean(selectedFile));
   $('selected-filename').hidden = !selectedFile; $('selected-filename').textContent = selectedFile?.name || '';
-  $('upload-label').textContent = selectedFile ? 'Сменить файл' : 'Выбрать DOCX';
-  $('upload-subtitle').textContent = selectedFile ? 'Выберите другой DOCX или перетащите его сюда' : 'или перетащите документ сюда';
+  $('upload-label').textContent = selectedFile ? 'Сменить' : 'Выбрать DOCX';
+  $('upload-subtitle').textContent = selectedFile ? 'Выберите другой DOCX или перетащите его сюда.' : 'или перетащите документ сюда';
   $('start-check').disabled = !selectedFile || Boolean(store.validate(selectedFile)) || Boolean(store.admissionError());
   if (!entry || mode !== 'report') return;
   if (data?.document_id && new URL(location.href).searchParams.get('document') !== data.document_id) {
@@ -80,13 +84,15 @@ function render() {
   }
   const busy = isBusy(entry), fixing = isFixing(entry), corrected = data?.current_version === 'corrected', report = data?.report;
   $('document-title').textContent = fixing ? 'Исправляем и повторно проверяем' : report ? corrected ? 'Отчёт исправленной копии' : 'Отчёт исходного документа' : busy ? 'Проверяем документ' : 'Отчёт пока недоступен';
-  $('document-state').textContent = fixing ? 'Предыдущий отчёт сохранён. Результат появится после завершения всей операции.' : entry.refreshing ? 'Обновляем статус…' : corrected ? 'Поддерживаемые исправления применены. Копия повторно проверена.' : '';
+  $('document-state').textContent = !report && busy ? 'Проверяем оформление по СТП 01–2017. Результат появится после завершения проверки.' : fixing ? 'Предыдущий отчёт сохранён. Результат появится после завершения всей операции.' : entry.refreshing ? 'Обновляем статус…' : corrected ? 'Поддерживаемые исправления применены. Копия повторно проверена.' : '';
   notice('document-message', entry.error || data?.last_error?.message || '', true);
   $('report').hidden = !report; $('report-counts').hidden = !report;
   $('waiting').hidden = Boolean(report); $('waiting-spinner').hidden = !busy;
-  $('waiting-title').textContent = busy ? 'Проверяем оформление по СТП' : 'Проверка не дала доступного отчёта';
+  $('waiting-title').textContent = busy ? 'Проверка выполняется' : 'Проверка не дала доступного отчёта';
   $('waiting-filename').textContent = entry.filename;
-  $('waiting-note').textContent = busy ? 'Результат появится после завершения проверки. Исходный файл не меняется. Можно работать с другими документами.' : 'Используйте действие ниже или выберите другой DOCX. Автоматического повтора загрузки нет.';
+  $('waiting-meta').textContent = `${limitText()}   /   СТП 01–2017`;
+  $('waiting-button').hidden = !busy;
+  $('waiting-note').textContent = busy ? 'Результат откроется на этой странице. Исходный файл не меняется.' : 'Используйте действие ниже или выберите другой DOCX. Автоматического повтора загрузки нет.';
   $('refresh').hidden = !data || (!entry.error && !busy && data.state !== 'failed');
   $('refresh').disabled = Boolean(entry.refreshing || entry.operation || !store.session);
   $('retry-upload').hidden = !entry.file || busy;
@@ -94,25 +100,24 @@ function render() {
   $('choose-again').hidden = busy || Boolean(report);
   $('recovery-actions').hidden = ['refresh', 'retry-upload', 'choose-again'].every(id => $(id).hidden);
   if (!report) return;
-  $('actions-title').textContent = fixing ? 'Исправляем и проверяем' : corrected ? 'Исправленная копия' : entry.error ? 'Автоисправление не завершено' : report.findings.length ? 'Исправить оформление' : 'Получить проверенную копию';
-  $('actions-description').textContent = corrected ? 'Поддерживаемые правки применены. Ниже актуальный результат повторной проверки.' : fixing ? 'Дождитесь завершения операции. Исходный отчёт и его отметки сохранены.' : 'Поддерживаемые правки применятся ко всему документу, не к карточке.';
+  $('application').classList.toggle('report-fixing', fixing);
+  $('actions-title').textContent = fixing ? 'Исправляем и повторно проверяем' : corrected ? 'Исправленная копия' : entry.error ? 'Автоисправление не завершено' : report.findings.length ? 'Исправить оформление' : 'Получить проверенную копию';
+  $('actions-description').textContent = corrected ? 'Поддерживаемые правки применены. Копия повторно проверена.' : fixing ? 'Применяем поддерживаемые правки к копии и проверяем её заново. Дождитесь завершения всей операции.' : 'Поддерживаемые правки применятся ко всему документу, не к карточке.';
   $('fix-spinner').hidden = !fixing;
   $('fix').disabled = busy || corrected || entry.refreshing || Boolean(store.admissionError());
-  $('fix').textContent = fixing ? 'Операция выполняется…' : corrected ? 'Копия уже обработана' : !report.findings.length ? 'Создать проверенную копию' : 'Автоисправить документ';
-  $('action-note').textContent = corrected ? 'Оставшиеся замечания проверьте в Word. После ручных правок загрузите документ заново.' : 'Исходный файл не меняется. После автоисправления копия проходит повторную проверку и становится доступна для скачивания.';
+  $('fix').textContent = fixing ? 'Операция выполняется…' : corrected ? 'Автоисправление применено' : !report.findings.length ? 'Создать проверенную копию' : 'Автоисправить документ';
+  $('action-note').textContent = fixing ? 'Исходный отчёт и ваши отметки сохранены.' : corrected ? 'Оставшиеся замечания исправьте в Word.' : 'Исходный файл не меняется';
   $('download').disabled = !data.download_url || entry.downloading;
+  $('download').classList.toggle('lime', Boolean(data.download_url)); $('download').classList.toggle('secondary', !data.download_url);
   $('download').textContent = entry.downloading ? 'Получаем файл…' : 'Скачать исправленную копию';
-  $('download-note').textContent = data.download_url ? 'Копия готова. Оставшиеся замечания не мешают скачиванию.' : 'Доступно после повторной проверки. Оставшиеся замечания не мешают скачиванию.';
+  $('download-note').textContent = data.download_url ? 'Копия готова к скачиванию' : fixing ? 'Доступно после повторной проверки.' : 'Скачивание после повторной проверки. Оставшиеся замечания не мешают.';
   $('download-status').textContent = entry.downloaded ? '✓ Скачивание началось' : '';
   const { visible } = renderReport(entry, { mobile: mobile.matches, onSelect: index => { entry.selectedFinding = index; render(); }, onMark: (index, checked) => store.mark(entry, index, checked) });
-  // Empty list states follow frames 06 and 07: compact header, no heading or counters, centred actions panel.
+  // Empty list states follow frames 06 and 07: the list and detail give way to one card.
   const empty = !visible.length, clean = !report.findings.length && !corrected && !busy;
   $('application').classList.toggle('report-empty', empty); $('application').classList.toggle('report-clean', empty && clean);
   $('document-actions').hidden = empty && clean;
-  if (empty && !corrected && !busy && !entry.error) {
-    $('action-note').textContent = 'Исходный файл не меняется';
-    $('download-note').textContent = 'Доступно после повторной проверки';
-  }
+  if (empty && !corrected && !busy && !entry.error) $('download-note').textContent = 'Доступно после повторной проверки';
 }
 async function download() {
   const entry = current();

@@ -181,20 +181,21 @@
 .example-section { height:820px; padding-top:67px }
 #landing .example-section h2 { margin-top:24.6px }
 .example-grid { display:grid; grid-template-columns:744fr 456fr; gap:64px; margin-top:51.7px; padding-right:16px }
-.example-frame { height:505px; padding:28px 32px; border-radius:34px; background:#eaf6fc }
-.example-finding { height:449px; padding:38px 26px 0 28px; border-radius:24px; background:#fff; box-shadow:var(--card-shadow) }
-#landing .example-kicker { font-size:11px; font-weight:500; color:#b24b37; text-transform:uppercase; white-space:pre-wrap }
-#landing .example-finding h3 { margin:14px 0 0 -2px; font-size:30px; font-weight:500 }
-.example-values { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); height:82px; margin:15.5px 0 0 -2px; padding:14px 18px 0; border-radius:14px; background:#f4f6f7 }
-.example-values small { display:block; font-size:10px; color:var(--muted); text-transform:uppercase }
-#landing .example-values p { margin-top:7.5px; font-size:25px; white-space:nowrap }
-#landing .example-values div:last-child p { color:var(--blue-text) }
-#landing .example-finding h4 { margin-top:40px; font-size:20px }
-#landing .example-quote { margin-top:10px; font-size:15px; color:var(--muted) }
-.example-location-actions { display:flex; justify-content:space-between; align-items:flex-start; margin-top:51.25px; font-size:13px; color:var(--blue-text) }
-#landing #example-copy { display:inline-flex; align-items:center; gap:8.67px; margin-left:-1px; padding:0; color:var(--blue-text); font-size:13px; line-height:1.45; letter-spacing:-.01em }
-.example-location-actions>span { width:97px; white-space:pre }
-#landing .example-reference { margin:20.15px 0 0 -1px; font-size:13px; color:var(--muted) }
+/* Пример повторяет карточку реального отчёта: значения строками, место с фрагментом, основание. */
+.example-frame { min-height:505px; padding:28px 32px; border-radius:34px; background:#eaf6fc }
+.example-finding { min-height:449px; padding:30px 28px 26px; border-radius:24px; background:#fff; box-shadow:var(--card-shadow); color:#19201e; letter-spacing:-.01em }
+#landing .example-kicker { font-size:12px; font-weight:600; line-height:18px; color:#a34935; text-transform:uppercase }
+#landing .example-finding h3 { margin:8px 0 13px; font-size:24px; font-weight:600; line-height:34px }
+.example-values { display:grid; gap:14px; padding:14px 20px 16px; border-radius:12px; background:#f1f3ef }
+.example-values small { display:block; margin-bottom:6px; font-size:12px; line-height:18px; color:#66716c; text-transform:uppercase }
+#landing .example-values p { font-size:15px; line-height:1.5 }
+#landing .example-finding h4 { margin:16px 0 8px; font-size:14px; font-weight:600; line-height:22px }
+.example-location { padding:12px 14px; border-left:4px solid #b4dc4a; border-radius:4px 14px 14px 4px; background:#f6faea; font-size:13px }
+#landing .example-location-heading { margin-bottom:6px; font-weight:600; color:#1f2a1c }
+#landing .example-quote { font-size:14px; line-height:1.5; color:#1f2a1c }
+#landing #example-copy { margin-top:4px; padding:4px 0; font-size:12px; font-weight:600; line-height:1.5; color:#3f5a14 }
+#landing .example-more { margin-top:10px; font-size:13px; color:#4a5841 }
+#landing .example-reference { margin-top:12px; font-size:12px; line-height:20px; color:var(--muted) }
 .example-explanation { padding-top:13px }
 #landing .example-explanation h3 { font-size:31px; line-height:1.18 }
 #landing .example-explanation p { max-width:450px; color:var(--muted) }
@@ -275,7 +276,6 @@
 .site-footer nav { display:flex; flex-direction:column; gap:17.7px; padding-top:17px; font-size:14px; white-space:nowrap }
 .site-footer nav a:hover { text-decoration:underline }
 .footer-bottom { grid-column:1/-1; display:flex; justify-content:space-between; align-items:flex-start; gap:20px; padding-top:24px; border-top:1px solid var(--line); font-size:12px; color:var(--muted) }
-.footer-bottom span:last-child { margin-top:7px; text-align:right }
 
 /* Адаптация */
 @media(max-width:1259px) {
@@ -297,8 +297,6 @@
   .feature-list { grid-column:2 }
   .feature-list article { height:auto; min-height:140px; padding-bottom:26px }
   .example-grid { grid-template-columns:minmax(0,1fr); gap:48px; padding-right:0 }
-  .example-frame,.example-finding { height:auto }
-  .example-finding { padding-bottom:30px }
   .process { height:auto; padding-bottom:64px }
   .steps { grid-template-columns:repeat(2,minmax(0,1fr)); gap:48px 32px; padding:0 48px }
   .steps::before { display:none }
@@ -357,13 +355,8 @@
   .example-section { padding-top:56px; padding-bottom:56px }
   .example-grid { margin-top:36px }
   .example-frame { padding:14px; border-radius:26px }
-  .example-finding { padding:24px 20px }
-  #landing .example-finding h3 { font-size:24px }
-  .example-values { grid-template-columns:minmax(0,1fr); height:auto; gap:12px; padding:14px 18px }
-  #landing .example-values p { font-size:20px; white-space:normal }
-  #landing .example-finding h4 { margin-top:28px }
-  .example-location-actions { flex-direction:column; gap:12px; margin-top:28px }
-  .example-location-actions>span { width:auto }
+  .example-finding { min-height:0; padding:22px 18px }
+  .example-frame { min-height:0 }
   #landing .example-explanation h3 { font-size:27px }
   #landing .example-explanation h4 { margin-top:36px }
   .process { margin:0 8px 28px; padding-top:52px; border-radius:32px }
@@ -386,7 +379,6 @@
   .site-footer { column-gap:20px }
   .site-footer nav { white-space:normal }
   .footer-bottom { flex-direction:column; gap:10px }
-  .footer-bottom span:last-child { margin-top:0; text-align:left }
 }
 @media(max-width:380px) {
   #landing .header-cta { padding:0 12px; font-size:11px }

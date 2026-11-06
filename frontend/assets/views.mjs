@@ -45,10 +45,13 @@ function locationBlock(location) {
 }
 function fillDetail(entry, finding, index, onMark) {
   const detail = $('finding-detail'); detail.replaceChildren();
-  detail.append(element('p', `eyebrow status-${finding.status}`, `${finding.rule_id} / ${STATUSES[finding.status] || finding.status}`), element('h2', '', RULES[finding.rule_id] || 'Замечание по оформлению'));
+  const kicker = isFixing(entry) ? `Предыдущий отчёт · ${finding.rule_id}` : `${finding.rule_id} / ${STATUSES[finding.status] || finding.status}`;
+  detail.append(element('p', `eyebrow status-${finding.status}`, kicker), element('h2', '', RULES[finding.rule_id] || 'Замечание по оформлению'));
   const comparison = element('div', 'comparison');
-  for (const [label, value] of [['Обнаружено', finding.actual], ['Требуется', finding.expected]]) {
-    const column = element('div'); column.append(element('small', '', label), element('p', '', value)); comparison.append(column);
+  // Frames 10 and 11 put ❌ and ✅ before the labels of an error; other statuses keep plain labels.
+  const marks = finding.status === 'error' ? ['❌ ', '✅ '] : ['', ''];
+  for (const [label, value, mark] of [['Обнаружено', finding.actual, marks[0]], ['Требуется', finding.expected, marks[1]]]) {
+    const column = element('div'); column.append(element('small', '', mark + label), element('p', '', value)); comparison.append(column);
   }
   detail.append(comparison, element('h3', '', `Места в документе · ${finding.locations.length}`));
   if (finding.locations.length) detail.append(locationBlock(finding.locations[0]));

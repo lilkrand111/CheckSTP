@@ -82,7 +82,7 @@ p {
 [tabindex="-1"]:focus {
   outline:none
 }
-.sky :focus-visible,.application>header :focus-visible,.app-meta :focus-visible {
+.sky :focus-visible,.application>header :focus-visible {
   outline-color:#d0fa69
 }
 section[id],aside[id] {
