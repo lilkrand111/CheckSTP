@@ -108,6 +108,8 @@ class Model:
     appendices: List[Paragraph] = field(default_factory=list)
     main_complete: bool = False
     opaque_objects: bool = False
+    # Allowed first-line indent (twips) used by this document; see rules.common.
+    first_line_target: Optional[int] = None
 
     @property
     def body(self):

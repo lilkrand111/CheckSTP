@@ -34,9 +34,9 @@ def page_number_format(value):
 def spacing(value, mode):
     if mode == "auto":
         if value == 240:
-            return "Межстрочный интервал — одинарный (1,0)."
-        return f"Межстрочный интервал — {number(value / 240)}."
+            return "Межстрочный интервал: одинарный (1,0)."
+        return f"Межстрочный интервал: {number(value / 240)}."
     name = {"exact": "Точно", "atLeast": "Минимум"}.get(mode)
     if name:
-        return f"Межстрочный интервал задан в режиме «{name}»: {number(value / 20)} пт."
-    return f"Межстрочный интервал задан в пунктах: {number(value / 20)} пт."
+        return f"Межстрочный интервал: «{name}» {number(value / 20)} пт."
+    return f"Межстрочный интервал: {number(value / 20)} пт."

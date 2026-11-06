@@ -1,7 +1,8 @@
 import re
 
 from . import rule
-from .common import LOG, cap_errors, check_indent, indent, ordinary, size_range, visible_runs
+from .common import (FIRST_LINE_ACTION, LOG, cap_errors, check_indent, indent, ordinary, page_section,
+                     size_range, visible_runs)
 from .headings import check_alignment, check_zero_indent, title_runs, titles, unnumbered
 from ..continuations import formula_continuations
 from ..constraints import PAGE_SETUP, SECTION_INDENT_MM, SINGLE_LINE, mm_to_twips
@@ -24,8 +25,8 @@ def page_setup(model, report):
             expected = mm * 1440 / 25.4
             invalid = twips < expected - 1 if minimum else abs(twips - expected) > 1
             if invalid:
-                report.add({"section": f"Параметры страницы, секция {i}", "property": name},
-                           f"{label} — {format_number(twips * 25.4 / 1440)} мм.",
+                report.add({"section": page_section(model, i), "property": name},
+                           f"{label}: {format_number(twips * 25.4 / 1440)} мм.",
                            f"Установите {target} {'не менее ' if minimum else ''}{mm} мм.",
                            diagnostic=Diagnostic("section_property", section._sectPr, name,
                                                  twips, mm_to_twips(mm)))
@@ -105,7 +106,7 @@ def paragraph_spacing(model, report):
         value, mode = p.props["line"], p.props["lineRule"]
         if (value, mode) != SINGLE_LINE:
             report.add(p, spacing(value, mode),
-                       "В настройках абзаца установите одинарный межстрочный интервал (1,0).",
+                       "В окне «Абзац» выберите междустрочный интервал «Одинарный».",
                        prop="line_spacing",
                        diagnostic=Diagnostic("paragraph_line_spacing", p, "line_spacing",
                                              (value, mode), SINGLE_LINE))
@@ -120,14 +121,12 @@ def first_line(model, report):
             if continuation == "continuation":
                 continue
             if continuation == "review":
-                report.add(p, "Отступ первой строки — 0 мм. Текст следует за формулой; "
-                           "не удалось уверенно определить, продолжает ли он прежнее предложение.",
-                           "Проверьте связь текста с формулой. Если это продолжение прежнего предложения, "
-                           "оставьте нулевой отступ. Если начинается новый абзац, установите отступ "
-                           "первой строки 12,5 или 12,7 мм (1,25 или 1,27 см).",
+                report.add(p, "Абзац после формулы начинается без отступа первой строки.",
+                           "Если абзац продолжает предложение с формулой, отступ не нужен. "
+                           "Если это новый абзац, " + FIRST_LINE_ACTION[0].lower() + FIRST_LINE_ACTION[1:],
                            "review", prop="first_line_indent")
                 continue
-        check_indent(p, report)
+        check_indent(model, p, report)
 
 
 @rule("F05")
@@ -158,41 +157,39 @@ def heading_numbers(model, report):
         if len(number) == 1 and re.match(r"^\s*\d+\.\s", p.numbered_text):
             report.add(p, "После номера раздела стоит точка.", "Уберите точку после номера раздела.")
         if p.heading_level not in (1, 2):
-            check_indent(p, report)
+            check_indent(model, p, report)
 
 
 def check_subsection_layout(model, p, report):
     desired = subsection_layout.target(model, p)
-    expected = ("Задайте выступ и табуляцию после номера: "
-                "номер начинается с 1,25 см, а продолжение заголовка — под началом его текста. "
-                "Не выравнивайте продолжение пробелами.")
     if desired is None:
-        report.add(p, "Не удалось однозначно определить отступы и разделитель номера подраздела.",
-                   expected, "review", prop="subsection_indentation")
+        report.add(p, "Отступы и знак после номера подраздела заданы нестандартно.",
+                   "Номер должен начинаться с 1,25 см, а вторая строка заголовка под началом его текста. "
+                   "Между номером и названием поставьте табуляцию. Не выравнивайте строки пробелами.",
+                   "review", prop="subsection_indentation")
         return
     actual = subsection_layout.current_value(model, p)
     if actual == desired:
         return
     hanging_cm = desired[0][2] * 2.54 / 1440
     column_cm = (desired[0][0] + desired[0][2]) * 2.54 / 1440
-    expected += (f" Для этого номера используйте выступ {format_number(hanging_cm)} см "
-                 f"и левую позицию табуляции {format_number(column_cm)} см; справа — 0 см.")
-    report.add(p, "Отступы или табуляция подраздела не обеспечивают общее начало текста "
-               "первой и последующих строк.", expected, prop="subsection_indentation",
+    column = format_number(column_cm)
+    expected = (f"Номер начинается с 1,25 см, текст заголовка с {column} см. "
+                f"Установите выступ {format_number(hanging_cm)} см и позицию табуляции {column} см, "
+                "справа 0 см. Между номером и названием поставьте табуляцию вместо пробела.")
+    report.add(p, "Отступы заголовка подраздела не настроены: длинный заголовок перенесётся неровно.",
+               expected, prop="subsection_indentation",
                diagnostic=Diagnostic("subsection_layout", p, "subsection_indentation", actual, desired))
 
 
 def check_section_indentation(p, report, props):
     """Customer-approved Word settings for numbered section headings."""
-    expected = (
-        "В Word откройте настройки абзаца и установите: отступ слева — 1,25 см; "
-        "справа — 0 см; особый отступ — «Выступ» на 0,5 см."
-    )
+    expected = "В окне «Абзац» установите отступ слева 1,25 см, справа 0 см и выступ 0,5 см."
     values = section_indentation_values(props)
     if values is None:
-        report.add(p, "Отступы заголовка раздела заданы в знаках. "
-                   "Без расчёта расположения текста нельзя точно определить их размер в сантиметрах.",
-                   "Проверьте отступы вручную. " + expected, "review", prop="heading_indentation")
+        report.add(p, "Отступы заголовка раздела заданы в знаках, а не в сантиметрах.",
+                   "В окне «Абзац» задайте отступы в сантиметрах: слева 1,25 см, справа 0 см, выступ 0,5 см.",
+                   "review", prop="heading_indentation")
         return
     # Translate the OOXML coordinates to the supplied Word for Mac
     # dialog settings. This is a representation conversion, not another norm.
@@ -214,13 +211,13 @@ def check_section_indentation(p, report, props):
         return text
 
     if hanging:
-        special = f"«Выступ» на {cm(hanging, 0.5)} см"
+        special = f"выступ {cm(hanging, 0.5)} см"
     elif props.get("firstLine", 0):
-        special = f"«Первая строка» на {cm(props['firstLine'])} см"
+        special = f"отступ первой строки {cm(props['firstLine'])} см вместо выступа"
     else:
-        special = "не задан"
-    report.add(p, f"Отступ слева — {cm(checked_left, 1.25)} см; справа — {cm(right, 0)} см; "
-               f"особый отступ — {special}.", expected, prop="heading_indentation",
+        special = "выступа нет"
+    report.add(p, f"Сейчас: слева {cm(checked_left, 1.25)} см, справа {cm(right, 0)} см, {special}.",
+               expected, prop="heading_indentation",
                diagnostic=Diagnostic("section_heading_indentation", p, "heading_indentation",
                                      values, tuple(mm_to_twips(mm) for mm in SECTION_INDENT_MM) + (0,)))
 
@@ -228,14 +225,14 @@ def check_section_indentation(p, report, props):
 @rule("F06")
 def heading_text(model, report):
     for p in ordinary(model):
-        check_alignment(p, report, "both", "обычного текста", "text_alignment")
+        check_alignment(p, report, "both", "Текст", "text_alignment")
     for p in titles(model):
         if p.kind == "heading" or p.kind in ("abstract_heading", "appendices_heading"):
             if unnumbered(p):
-                check_alignment(p, report, "center", "ненумерованного заголовка", "unnumbered_heading_alignment")
+                check_alignment(p, report, "center", "Заголовок без номера", "unnumbered_heading_alignment")
                 check_zero_indent(p, report)
             else:
-                subject = "заголовка раздела" if p.heading_level == 1 else "заголовка подраздела"
+                subject = "Заголовок раздела" if p.heading_level == 1 else "Заголовок подраздела"
                 check_alignment(p, report, "left", subject, "heading_alignment")
         lines = [line for line in p.text.splitlines() if line.strip()]
         if p.kind == "appendix_heading":
@@ -243,9 +240,9 @@ def heading_text(model, report):
         elif p.kind == "appendix_meta":
             lines = lines[1:]
         if len(lines) > 1:
-            report.add(p, "В названии раздела или подраздела задан явный перенос строки.",
-                       "Проверьте в Word: вторая и последующие строки заголовка должны начинаться "
-                       "под началом текста первой строки. Не выравнивайте их повторением номера или пробелами.",
+            report.add(p, "В заголовок вставлен ручной перенос строки.",
+                       "Проверьте вторую строку заголовка: она должна начинаться под текстом первой строки. "
+                       "Не выравнивайте её номером или пробелами.",
                        "review", prop="heading_continuation")
     for p in model.headings:
         if p.heading_level not in (1, 2):
@@ -255,7 +252,8 @@ def heading_text(model, report):
             report.add(p, "Заголовок отсутствует.", "Укажите заголовок раздела или подраздела.")
             continue
         if p.heading_level == 1 and cap_errors(p, title):
-            report.add(p, "Заголовок раздела отображается не полностью прописными.", "Используйте прописные буквы.")
+            report.add(p, "Заголовок раздела написан не только прописными буквами.",
+                       "Напишите заголовок раздела прописными буквами.")
         if p.heading_level == 2:
             display_title = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", p.display_text).strip()
             first = next((c for c in display_title if c.isalpha()), "")
@@ -271,4 +269,4 @@ def heading_text(model, report):
         if any(r.props.get("underline") for r in visible_runs(p)):
             report.add(p, "В заголовке есть подчёркивание.", "Уберите подчёркивание заголовка.")
         if "\u00ad" in title or re.search(r"-\n[а-яa-z]", title):
-            report.add(p, "В заголовке есть явный перенос слова.", "Уберите перенос слова в заголовке.")
+            report.add(p, "В заголовке слово перенесено вручную.", "Уберите перенос слова в заголовке.")

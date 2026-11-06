@@ -23,7 +23,7 @@ class Settings:
     rate_limit_per_minute: float = field(default_factory=lambda: float(os.getenv("RATE_LIMIT_PER_MINUTE", "12")))
     rate_limit_burst: int = field(default_factory=lambda: int(os.getenv("RATE_LIMIT_BURST", "4")))
     rate_limit_max_clients: int = field(default_factory=lambda: int(os.getenv("RATE_LIMIT_MAX_CLIENTS", "4096")))
-    ruleset_version: str = "stp-01-2017-2026-10-22"
+    ruleset_version: str = "stp-01-2017-2026-11-06"
 
     def __post_init__(self):
         for name in ("max_upload_bytes", "max_storage_bytes", "max_concurrent_jobs", "processing_timeout", "worker_memory_mb",

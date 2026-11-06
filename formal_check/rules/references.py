@@ -59,15 +59,14 @@ def citations(model, report):
                 if number not in order:
                     order.append(number)
                 if number not in sources:
-                    report.add(p, f"Ссылка {fragment}: источник {number} не найден.",
+                    report.add(p, f"Ссылка {fragment} ведёт на источник {number}, которого нет в списке.",
                                "Укажите существующий номер источника в квадратных скобках.",
                                "error" if items and model.main_complete else "review")
     for number, p in items:
         if number not in order:
-            report.add(p, f"Ссылка на источник {number} в распознанном тексте не найдена.",
-                       "Добавьте ссылку на источник в тексте. Если это учебный материал по занятиям, "
-                       "проверьте применимость исключения из пункта 2.8.4: "
-                       "такой источник можно оставить без ссылки и разместить в конце списка.",
+            report.add(p, f"В тексте нет ссылки на источник [{number}].",
+                       f"Добавьте ссылку [{number}] в текст. Без ссылки можно оставить только учебные "
+                       "материалы по занятиям, их ставят в конец списка.",
                        "review")
     listed_cited = [n for n, _ in items if n in order]
     cited_existing = [n for n in order if n in sources]

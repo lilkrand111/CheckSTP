@@ -1,14 +1,22 @@
 """F22: the customer-requested blank line between a figure and its caption."""
 from .common import LOG
+from .headings import blank_details, edge_details, sentence
+from ..constraints import BLANK_LINE_SPACING
+from ..formatting import blank_line_spacing_values, paragraph_edge_spacing_values
+from ..model import Diagnostic
 from ..reader import paragraph_runs
 from ..xmlutil import attr, q, xp
 
 
 EXPECTED = (
-    "Между рисунком и подписью «Рисунок … – Наименование» оставьте одну пробельную строку. "
-    "Используйте один пустой абзац либо эквивалентный интервал в одну строку. "
-    "Пустая строка перед рисунком не заменяет строку перед подписью."
+    "Между рисунком и подписью оставьте одну пустую строку: "
+    "один пустой абзац или интервал такой же высоты."
 )
+GAP_FIX = ("Для пустой строки между рисунком и подписью выберите одинарный интервал, "
+           "«Перед» и «После» 0 пт. У рисунка и подписи уберите интервалы.")
+# Embedded objects that the reader does not count as pictures (OLE, VML,
+# compatibility wrappers). Such a paragraph may hold the figure itself.
+OBJECTS = ".//w:object | .//w:pict | .//w:drawing | .//mc:AlternateContent | .//w:txbxContent"
 
 
 def pagination_marker(node):
@@ -64,17 +72,27 @@ def after_picture(model, p):
 def check_figure_gap(model, caption, report):
     blanks = []
     image = caption if caption.images else None
-    if image is None:
+    preceding_text = None
+    if image is None and not xp(caption.xml, OBJECTS):
         for p in reversed([p for p in model.paragraphs if p.index < caption.index]):
             if (p.table is not None or p.region != caption.region or p.section != caption.section or
                     p.section_index != caption.section_index or p.appendix != caption.appendix):
                 break
+            if xp(p.xml, OBJECTS) and not p.images:
+                break  # An unrecognized object may be the figure: do not guess.
             if p.kind == "blank":
                 blanks.append(p)
                 continue
             if p.images:
                 image = p
+            elif p.text.strip() and not p.math and p.kind not in ("caption", "heading"):
+                preceding_text = p
             break
+    if image is None and preceding_text is not None:
+        report.add(caption, "Над подписью нет рисунка.",
+                   "Вставьте рисунок над подписью. Если рисунок стоит в другом месте, "
+                   "перенесите подпись под него.", "review", prop="figure_caption_gap")
+        return
     if image is None:
         LOG.info("F22: перед подписью «%s» не удалось связать рисунок с подписью; промежуток не оценён.",
                  caption.text.strip()[:80])
@@ -86,8 +104,7 @@ def check_figure_gap(model, caption, report):
 
     if (xp(image.xml, ".//wp:anchor | .//w:pict") or
             not xp(image.xml, ".//wp:inline")):
-        review("Рисунок плавающий либо его способ размещения не распознан; "
-               "расстояние до подписи нельзя определить по порядку абзацев.")
+        review("Рисунок размещён с обтеканием текстом, а не в строке текста.")
         return
     tail, before, gap_break = after_picture(model, image)
     # A break before the image or after the caption is outside the interval
@@ -100,10 +117,10 @@ def check_figure_gap(model, caption, report):
             xp(p.xml, './/w:br[@w:type="page" or @w:type="column"] | ./w:pPr/w:sectPr | '
                './/w:lastRenderedPageBreak') for p in blanks)
     if gap_break:
-        review("Между рисунком и началом подписи обнаружен разрыв страницы, колонки или секции.")
+        review("Между рисунком и подписью стоит разрыв страницы, колонки или раздела.")
         return
     if tail is None or before.strip() or (image is not caption and tail.strip()):
-        review("В абзаце рисунка есть другой текст либо связь рисунка с подписью неоднозначна.")
+        review("В одном абзаце с рисунком есть текст.")
         return
 
     if image is caption:
@@ -121,6 +138,21 @@ def check_figure_gap(model, caption, report):
             (image, "afterAutospacing"), (caption, "beforeAutospacing")))
         line_sources = blanks + ([image] if "\n" in tail else []) + ([caption] if "\n" in leading else [])
 
+    if (image is not caption and len(blanks) == 1 and blank_lines == 1 and
+            blanks[0].xml.getprevious() is image.xml and caption.xml.getprevious() is blanks[0].xml):
+        # One adjacent empty paragraph: the same requirement as after a heading (F07).
+        actual = (paragraph_edge_spacing_values(image.props, "after"),
+                  blank_line_spacing_values(blanks[0].props),
+                  paragraph_edge_spacing_values(caption.props, "before"))
+        required = ((0, 0, False), BLANK_LINE_SPACING, (0, 0, False))
+        if actual == required:
+            return
+        details = (blank_details(*actual[1]) + edge_details(*actual[0], "у рисунка", "после") +
+                   edge_details(*actual[2], "у подписи", "перед"))
+        report.add(caption, sentence("Промежуток между рисунком и подписью не равен одной строке", details),
+                   GAP_FIX, prop="figure_caption_gap",
+                   diagnostic=Diagnostic("blank_gap_spacing", blanks[0], "figure_caption_gap", actual, required))
+        return
     extra = any(p.props.get(key, 0) != 0 for p in blanks
                 for key in ("before", "after", "beforeLines", "afterLines"))
     extra = extra or any(p.props.get(key) in ("1", "true", "on") for p in blanks
@@ -133,8 +165,7 @@ def check_figure_gap(model, caption, report):
             not image.props.get("contextual_spacing") and not caption.props.get("contextual_spacing")):
         return
     if not blank_lines and not (spaced or lines or automatic):
-        report.add(caption, "Между рисунком и подписью нет пробельной строки или заданного интервала.",
+        report.add(caption, "Между рисунком и подписью нет пустой строки.",
                    EXPECTED, prop="figure_caption_gap")
     else:
-        review(f"Между рисунком и подписью распознано пустых строк: {blank_lines}. "
-               "Равенство промежутка одной пробельной строке нельзя подтвердить по настройкам.")
+        review(f"Промежуток между рисунком и подписью задан нестандартно: пустых строк {blank_lines}.")

@@ -3,6 +3,7 @@ import re
 from . import rule
 from .common import (LOG, check_indent, has_gap, numbering_check, prose)
 from .figure_spacing import check_figure_gap
+from .headings import physical_alignment
 from ..captions import NUMBER, NUMBER_TOKEN
 from ..reader import paragraph_runs, visible_run_text
 from ..xmlutil import attr, child, integer, on, q, val, xp
@@ -90,8 +91,9 @@ def formula_glyphs(model, report):
 def formula_breaks(model, report):
     for p in model.paragraphs:
         if p.math and xp(p.xml, ".//m:brk"):
-            report.add(p, "В редактируемой формуле задан явный разрыв.",
-                       "Проверьте повтор знака операции на границе строк, × при умножении и допустимость места переноса.",
+            report.add(p, "Формула вручную разбита на строки.",
+                       "Проверьте перенос: знак операции повторите в начале новой строки, при умножении "
+                       "используйте «×», переносите формулу только в допустимом месте.",
                        "review")
 
 
@@ -100,7 +102,7 @@ def formula_numbers(model, report):
     items = []
     for p, number in numbered_formulas(model):
         if not number:
-            report.add(p, "Номер распознанной отдельнострочной формулы не обнаружен.",
+            report.add(p, "У формулы на отдельной строке нет номера.",
                        "Проверьте, не относится ли формула к группе с общим номером. "
                        "Если общего номера нет, добавьте номер арабскими цифрами в круглых скобках.", "review")
         else:
@@ -108,10 +110,9 @@ def formula_numbers(model, report):
     numbering_check(items, report, "формулы", gap_status="review")
     main = [(p, n) for p, n, _ in items if not p.appendix]
     if any("." not in n for _, n in main) and len(main) > 10:
-        report.add(main[0][0], f"Найдено {len(main)} пронумерованных формул, среди которых есть номера без номера раздела.",
-                   "Проверьте выбранную систему нумерации формул. При количестве не более десяти "
-                   "СТП прямо разрешает сквозные номера, например (1), (2). "
-                   "Для большего количества уточните применение нумерации по разделам, например (2.1).", "review")
+        report.add(main[0][0], f"В работе {len(main)} формул с номерами, и часть номеров без номера раздела.",
+                   "СТП разрешает сквозные номера (1), (2), если формул не больше десяти. "
+                   "Для большего числа формул проверьте нумерацию по разделам, например (2.1).", "review")
 
 
 @rule("F20")
@@ -127,8 +128,9 @@ def formula_references(model, report):
                 report.add(p, f"Ссылка «{match[0]}» не содержит парных круглых скобок.",
                            "Заключите номер формулы в круглые скобки.")
             if match[2] not in numbers:
-                report.add(p, f"Формула {match[2]} из ссылки не найдена среди распознанных формул.",
-                           "Проверьте номер и наличие формулы, включая изображения и текстовые записи.", "review")
+                report.add(p, f"В тексте есть ссылка на формулу ({match[2]}), но формулы с таким номером не найдено.",
+                           "Проверьте номер формулы в ссылке. Если формула вставлена картинкой, "
+                           "сверьте её номер вручную.", "review")
 
 
 def caption_style(p, match, report, name):
@@ -140,7 +142,7 @@ def caption_style(p, match, report, name):
         return
     title_match = re.match(r"\s+[-–—]\s+(\S.*)", tail, re.S)
     if not title_match:
-        report.add(p, "После номера не распознаны разделитель с пробелами и наименование.",
+        report.add(p, "После номера в подписи нет тире с пробелами и названия.",
                    f"Оформите подпись по образцу «{name} 1 – Наименование», подставив нужный номер и название.")
         return
     title = title_match[1].strip()
@@ -189,12 +191,12 @@ def figures(model, report):
         for number in figure_reference_numbers(p.text):
             referred.add(number)
             if number not in targets:
-                report.add(p, f"Рисунок {number} из ссылки не найден среди подписей.",
-                           "Проверьте номер и наличие подписи рисунка.", "review")
+                report.add(p, f"В тексте есть ссылка на рисунок {number}, но подписи «Рисунок {number}» нет.",
+                           "Проверьте номер рисунка в ссылке и подпись под рисунком.", "review")
     for number, p in targets.items():
         if number not in referred:
-            report.add(p, f"Ссылка на рисунок {number} в распознанном тексте не найдена.",
-                       "Добавьте ссылку на рисунок.", "error" if model.main_complete else "review")
+            report.add(p, f"В тексте нет ссылки на рисунок {number}.",
+                       f"Добавьте ссылку в текст, например «на рисунке {number}».", "error" if model.main_complete else "review")
 
 
 @rule("F23")
@@ -206,7 +208,7 @@ def tables(model, report):
         if not table.caption:
             target = next((p for c in table.cells for p in c.paragraphs if p.text.strip()), None)
             if target:
-                report.add(target, "У таблицы не обнаружена подпись; назначение таблицы не подтверждено.",
+                report.add(target, "У таблицы нет подписи.",
                            "Проверьте назначение таблицы. Если она содержит данные работы, добавьте над ней "
                            "подпись по образцу «Таблица 1 – Заголовок». Таблицам для подписей и реквизитов "
                            "такой заголовок не требуется.", "review")
@@ -220,7 +222,7 @@ def tables(model, report):
         elif continuation:
             items.append((p, continuation[1], True))
         else:
-            report.add(p, "В подписи таблицы не найден номер.",
+            report.add(p, "В подписи таблицы нет номера.",
                        "Оформите подпись по образцу «Таблица 1 – Заголовок», подставив нужный номер и название.")
     numbering_check(items, report, "таблицы", True)
 
@@ -231,8 +233,8 @@ def table_layout(model, report):
         p = table.caption
         if table.kind != "data" or p is None:
             continue
-        if p.props["alignment"] not in ("left", "start"):
-            report.add(p, f"Заголовок таблицы выровнен {alignment_name(p.props['alignment'])}.",
+        if physical_alignment(p) != "left":
+            report.add(p, f"Заголовок таблицы выровнен {alignment_name(physical_alignment(p))}.",
                        "Выровняйте заголовок таблицы по левому краю.")
         if any(x.index > p.index and x.index < table.before and x.table is None and not x.text.strip()
                for x in model.paragraphs):
@@ -241,9 +243,9 @@ def table_layout(model, report):
         if p.props.get("after", 0) or p.props.get("afterLines", 0):
             LOG.info("F24: у подписи таблицы %s есть интервал после; фактический зазор требует просмотра.", table.index)
         if has_gap(model, p, False) is False:
-            report.add(p, "Перед заголовком таблицы нет явно заданного промежутка.",
-                       "Проверьте промежуток перед заголовком таблицы. Он должен быть равен одной пустой строке; "
-                       "задайте его интервалом абзаца или пустым абзацем.", "review")
+            report.add(p, "Перед заголовком таблицы нет пустой строки.",
+                       "Оставьте перед заголовком таблицы одну пустую строку: "
+                       "пустой абзац или интервал такой же высоты.", "review")
 
 
 @rule("F25")
@@ -264,8 +266,8 @@ def table_continuations(model, report):
                 first_rows = [[c.text for c in original.cells if c.row == row and not c.continuation]
                               for row in (1, 2, 3)]
                 if not numeric or current_head not in first_rows:
-                    report.add(table.caption, "В продолжении таблицы не найдены такие же заголовки столбцов "
-                               "или номера столбцов, как в первой части.",
+                    report.add(table.caption, "Заголовки или номера столбцов в продолжении таблицы "
+                               "отличаются от первой части.",
                                "Повторите заголовки столбцов из первой части таблицы. Если вместо заголовков используются "
                                "номера столбцов, они должны совпадать в первой части и в продолжении.", "review")
     LOG.info("F25: автоматические переносы таблиц, части рядом и линии на границе страниц не проверены без рендеринга.")
@@ -290,7 +292,7 @@ def table_headers(model, report):
                            "В остальных случаях уберите точку в конце заголовка.", "review")
             first = next((c for c in cell.text if c.isalpha()), "")
             if first.islower():
-                report.add(p, "Заголовок графы начинается со строчной.",
+                report.add(p, "Заголовок графы начинается со строчной буквы.",
                            "Проверьте, является ли ячейка самостоятельным заголовком. "
                            "Самостоятельный заголовок начните с прописной буквы. "
                            "У подзаголовка, который продолжает вышестоящий заголовок, строчная буква допустима.", "review")
@@ -332,7 +334,7 @@ def table_values(model, report):
             if child(cell.xml, "w:tcPr/w:vMerge") is not None:
                 continue
             if not cell.text and cell.paragraphs and not xp(cell.xml, ".//w:drawing | .//m:oMath | .//w:pict | .//w:object"):
-                report.add(cell.paragraphs[0], "Необъединённая ячейка данных пуста.",
+                report.add(cell.paragraphs[0], "Ячейка таблицы пустая.",
                            "Проверьте назначение ячейки. Если она предназначена для данных, но данных нет, поставьте тире. "
                            "Ячейку, которая служит только для оформления таблицы, менять не нужно.", "review", prop="cell_value")
             if re.match(r"^\s*(?:От|Св\.?)\s+\d", cell.text, re.I) and "до" in cell.text and "включ." not in cell.text:
@@ -366,13 +368,13 @@ def footnotes(model, report):
                 "section": f"Сноска {note_id}", "property": "footnote_text"}
             first_line = props.get("firstLine", 0) - props.get("hanging", 0)
             if first_line <= 0:
-                report.add(location, "Текст сноски не имеет положительного абзацного отступа.",
-                           "Добавьте отступ первой строки в настройках абзаца пояснения сноски.")
+                report.add(location, "У текста сноски нет отступа первой строки.",
+                           "Добавьте отступ первой строки в тексте сноски.")
         if attr(ref, "customMarkFollows") in ("1", "true"):
             report.add(p, "Сноска использует пользовательский знак.",
                        "Проверьте арабскую цифру со скобкой и совпадение знака перед пояснением.", "review")
         elif not re.search(r"\)", "".join(visible_run_text(r) for r in paragraph_runs(p.xml))):
-            report.add(p, "У автоматической ссылки на сноску не распознана скобка.",
+            report.add(p, "После номера сноски нет скобки.",
                        "Проверьте знак сноски: арабская цифра со скобкой и такой же знак перед пояснением.", "review")
     if not references:
         LOG.info("F35: пользовательские сноски отсутствуют; условная проверка пропущена.")
@@ -397,12 +399,12 @@ def notes(model, report):
             previous = None
             continue
         if re.match(r"^\s*примечани[ея]", p.text):
-            report.add(p, "Обозначение примечания начинается со строчной.", "Напишите «Примечание» с прописной.")
+            report.add(p, "Слово «Примечание» начинается со строчной буквы.", "Напишите «Примечание» с прописной.")
         if re.match(r"^\s*Примечания\s*$", p.text, re.I):
             previous = 0
         elif re.match(r"^\s*Примечание\s*[-–—]\s*\S", p.text, re.I):
             if p.table is None:
-                check_indent(p, report)
+                check_indent(model, p, report)
         elif not re.match(r"^\s*Примечани[ея]\s+\d+", p.text, re.I):
-            report.add(p, "Не распознан формат одиночного примечания.",
+            report.add(p, "Примечание оформлено не по образцу.",
                        "Используйте «Примечание – Текст» либо нумерацию нескольких примечаний.")

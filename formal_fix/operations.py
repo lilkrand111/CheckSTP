@@ -17,7 +17,8 @@ ALLOWED = {
     ("F05", "paragraph_first_line_indent", "first_line_indent"),
     ("F05", "section_heading_indentation", "heading_indentation"),
     ("F05", "subsection_layout", "subsection_indentation"),
-    ("F07", "heading_gap_spacing", "heading_gap"),
+    ("F07", "blank_gap_spacing", "heading_gap"),
+    ("F22", "blank_gap_spacing", "figure_caption_gap"),
     ("F06", "paragraph_first_line_indent", "heading_first_line_indent"),
     ("F06", "paragraph_side_indent", "heading_left_indent"),
     ("F06", "paragraph_side_indent", "heading_right_indent"),
@@ -50,8 +51,14 @@ def _gap_values(model, node):
             paragraph_edge_spacing_values(model.resolver.paragraph(following), "before"))
 
 
-def _unsafe(node):
+PICTURE_TAGS = {q(name) for name in ("w:drawing", "w:pict", "mc:AlternateContent")}
+
+
+def _unsafe(node, pictures_ok=False):
+    """pictures_ok: an untouched neighbour may hold an inline picture (F22)."""
     for item in node.iter():
+        if pictures_ok and item.tag in PICTURE_TAGS:
+            continue
         if item.tag in UNSAFE_TAGS:
             return True
         if isinstance(item.tag, str) and item.tag.startswith(q("w:")) and item.tag.endswith("Change"):
@@ -63,7 +70,7 @@ def _eligible(model, diagnostic):
     node = target_xml(diagnostic)
     if node.getroottree().getroot() is not model.document.element:
         return False
-    if _unsafe(node):
+    if _unsafe(node, pictures_ok=diagnostic.kind == "gap_neighbour"):
         return False
     for ancestor in node.iterancestors():
         if ancestor.tag in UNSAFE_TAGS:
@@ -82,7 +89,7 @@ def _eligible(model, diagnostic):
             props = model.resolver.paragraph(node)
             if any(key in props for key in INDENT_KEYS if key.endswith("Chars")):
                 return False
-        if diagnostic.kind == "heading_gap_spacing":
+        if diagnostic.kind == "blank_gap_spacing":
             if (p.kind != "blank" or p.num_id or p.props.get("page_break_before") or
                     any(r.text.strip() for r in p.runs) or
                     xp(node, ".//w:br | .//w:cr | .//w:fldChar | .//w:fldSimple | "
@@ -98,9 +105,13 @@ def _eligible(model, diagnostic):
                 return False
             # A gap is one operation: if any of its three paragraphs is unsafe,
             # do not change just the blank and leave an incomplete correction.
-            if any(not _eligible(model, replace(diagnostic, kind="gap_member", target=members[item]))
-                   for item in nodes):
-                return False
+            # A neighbour whose spacing is already correct stays untouched, so a
+            # picture inside it does not block the correction of the blank.
+            for position, item in enumerate(nodes):
+                untouched = position != 1 and diagnostic.actual[position] == diagnostic.expected[position]
+                kind = "gap_neighbour" if untouched else "gap_member"
+                if not _eligible(model, replace(diagnostic, kind=kind, target=members[item])):
+                    return False
         num_id, level = model.resolver.num_info(node)
         if num_id:
             lvl, _ = model.resolver.level(num_id, level)
@@ -120,7 +131,7 @@ def current_value(model, diagnostic, node=None):
         return section_indentation_values(model.resolver.heading_paragraph(node))
     if diagnostic.kind == "subsection_layout":
         return subsection_layout.current_value(model, diagnostic.target, node)
-    if diagnostic.kind == "heading_gap_spacing":
+    if diagnostic.kind == "blank_gap_spacing":
         return _gap_values(model, node)
     props = model.resolver.paragraph(node)
     if diagnostic.kind == "paragraph_side_indent":
@@ -175,7 +186,7 @@ def apply_plan(model, plan):
             child(node, tag).set(q("w:" + attribute), str(d.expected))
             if d.property in ("page_width", "page_height"):
                 child(node, "w:pgSz").set(q("w:orient"), "portrait")
-        elif d.kind == "heading_gap_spacing":
+        elif d.kind == "blank_gap_spacing":
             nodes = _gap_nodes(node)
             current = _gap_values(model, node)
             names = (("after", "afterLines", "afterAutospacing"),

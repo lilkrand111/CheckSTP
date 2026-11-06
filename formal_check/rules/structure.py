@@ -1,8 +1,8 @@
 import re
 
 from . import rule
-from .common import APP_ALPHABET, LOG, cap_errors, explicit_page_break, prose, size_range
-from .headings import check_heading_gap, check_zero_indent, titles
+from .common import APP_ALPHABET, LOG, cap_errors, explicit_page_break, page_section, prose, size_range
+from .headings import check_heading_gap, check_zero_indent, physical_alignment, titles
 from ..classify import heading_parts, normalized
 from ..xmlutil import attr, child, integer, parse, q, val, xp
 from ..messages import alignment, page_number_format
@@ -21,7 +21,7 @@ def contents(model, report):
     toc_headers = [p for p in model.body if p.kind == "toc_heading"]
     if not toc_headers and not model.toc_entries:
         if model.headings:
-            report.add(model.headings[0], "Содержание не обнаружено.", "Разместите содержание непосредственно после задания.")
+            report.add(model.headings[0], "В документе нет содержания.", "Разместите содержание непосредственно после задания.")
         else:
             LOG.info("F08: структура полного документа не распознана; наличие содержания не оценено.")
         return
@@ -30,7 +30,7 @@ def contents(model, report):
         prior = [p for p in model.body if p.index < toc.index and p.text.strip()]
         task = [p for p in prior if re.match(r"^\s*задание\b", p.text, re.I)]
         if task and any(p.kind == "heading" for p in prior if p.index > task[-1].index):
-            report.add(toc, "Между заданием и содержанием распознаны разделы основной части.",
+            report.add(toc, "Между заданием и содержанием стоят разделы основной части.",
                        "Разместите содержание непосредственно после задания.")
         elif not task:
             LOG.info("F08: граница задания не распознана; непосредственное следование содержания не проверено.")
@@ -53,12 +53,12 @@ def contents(model, report):
             report.add([p, candidates[0][0]], "Заголовки с одинаковым номером в содержании и тексте различаются.",
                        "Согласуйте номер и заголовок содержания с основным текстом.")
         else:
-            report.add(p, "Совпадающая запись в содержании не найдена.",
+            report.add(p, "Этого заголовка нет в содержании.",
                        "Включите номер и заголовок в содержание.", "review" if not p.heading_number else "error")
     main_numbers = {p.heading_number for p in model.headings if p.region == "main" and p.heading_number}
     for number, items in entries.items():
         if number and number not in main_numbers:
-            report.add(items[0][0], "Номер из содержания не найден среди распознанных заголовков.",
+            report.add(items[0][0], "В тексте нет заголовка с этим номером из содержания.",
                        "Сравните запись с заголовком в основном тексте и обновите содержание.", "review")
 
 
@@ -68,12 +68,13 @@ def contents_style(model, report):
         if p.kind != "toc_heading":
             continue
         if cap_errors(p):
-            report.add(p, "Название содержания отображается не прописными.", "Используйте «СОДЕРЖАНИЕ» прописными.")
+            report.add(p, "Слово «СОДЕРЖАНИЕ» написано не только прописными буквами.",
+                       "Напишите «СОДЕРЖАНИЕ» прописными буквами.")
         if any(not 14 <= s <= 16 for s in size_range(p)):
-            report.add(p, "Размер шрифта заголовка содержания не соответствует 14–16 пт.",
+            report.add(p, "Размер шрифта заголовка «СОДЕРЖАНИЕ» вне диапазона 14–16 пт.",
                        "Задайте размер шрифта 14–16 пт.")
         if p.props["alignment"] != "center":
-            report.add(p, f"Заголовок содержания выровнен {alignment(p.props['alignment'])}.",
+            report.add(p, f"Заголовок содержания выровнен {alignment(physical_alignment(p))}.",
                        "Выровняйте заголовок содержания по центру.", prop="unnumbered_heading_alignment")
         check_zero_indent(p, report)
     for p in model.toc_entries:
@@ -82,9 +83,9 @@ def contents_style(model, report):
         dot_tabs = any(align in ("right", "end") and leader == "dot"
                        for align, leader in p.props["tabs"].values())
         if not dot_tabs and not re.search(r"\.{2,}", p.text):
-            report.add(p, "В строке содержания не найдены точки перед номером страницы.",
-                       "Проверьте строку содержания. Между названием и номером страницы должны быть точки, "
-                       "а номера страниц должны выравниваться по правому краю.", "review")
+            report.add(p, "В строке содержания нет точек перед номером страницы.",
+                       "Добавьте точки между названием и номером страницы. "
+                       "Номер страницы выровняйте по правому краю.", "review")
 
 
 @rule("F10")
@@ -95,13 +96,13 @@ def page_numbering(model, report):
         element = section._sectPr
         numbering = child(element, "w:pgNumType")
         fmt, start = attr(numbering, "fmt", "decimal"), integer(attr(numbering, "start"))
-        location = {"section": f"Параметры страницы, секция {i}", "property": "page_numbering"}
+        location = {"section": page_section(model, i), "property": "page_numbering"}
         if fmt != "decimal":
             report.add(location, f"Формат нумерации страниц: {page_number_format(fmt)}.",
                        "Выберите обычные арабские цифры: 1, 2, 3 и так далее.")
         if i > 1 and start is not None:
-            report.add(location, f"В секции задан перезапуск нумерации со значения {start}.",
-                       "Проверьте сквозную нумерацию, включая приложения.", "review")
+            report.add(location, f"В этом разделе Word нумерация страниц начинается заново с {start}.",
+                       "Проверьте, что нумерация страниц сквозная, включая приложения.", "review")
         for kind in ("header", "footer"):
             for ref in xp(element, "./w:" + kind + "Reference"):
                 references[(kind, attr(ref, "type", "default"))] = ref.get(q("r:id"))
@@ -122,26 +123,29 @@ def page_numbering(model, report):
                 page_found = True
                 kind_name = "верхний колонтитул" if kind == "header" else "нижний колонтитул"
                 variant_name = {"first": "первая страница", "even": "чётные страницы",
-                                "default": "основные страницы"}.get(variant, "вид страниц не определён")
-                loc = {"section": f"Секция {i}, {kind_name}, {variant_name}", "property": "PAGE"}
+                                "default": "обычные страницы"}.get(variant, "особые страницы")
+                loc = {"section": page_section(model, i, kind_name, variant_name), "property": "PAGE"}
                 if kind == "header":
-                    report.add(loc, "Автоматический номер страницы размещён в верхнем колонтитуле.",
-                               "Перенесите номер страницы в нижний колонтитул.")
+                    report.add(loc, "Номер страницы стоит вверху страницы.",
+                               "Перенесите номер страницы вниз, в нижний колонтитул.")
                 if re.search(r"\\\*\s+(?:ROMAN|roman|ALPHABETIC|alphabetic)\b", fields):
-                    report.add(loc, "Вместо арабских цифр номер страницы записывается римскими цифрами или буквами.",
+                    report.add(loc, "Номер страницы записан римскими цифрами или буквами.",
                                "Выберите для номера страницы обычные арабские цифры: 1, 2, 3 и так далее.")
                 props = model.resolver.paragraph(p)
                 if kind == "footer" and props["alignment"] not in ("right", "end"):
                     right_tab = any(a in ("right", "end") for a, _ in props["tabs"].values())
                     if not right_tab:
-                        report.add(loc, "У номера страницы не задано выравнивание по правому краю.",
-                                   "Проверьте страницу в Word. Номер должен находиться справа внизу; "
-                                   "при необходимости выровняйте его по правому краю.", "review")
+                        report.add(loc, "Номер страницы не выровнен по правому краю.",
+                                   "Номер страницы должен стоять справа внизу. "
+                                   "Выровняйте его по правому краю.", "review")
     if not page_found and model.headings:
+        # Without any header/footer the document certainly has no page numbers;
+        # an existing header/footer may still hold a number typed by hand.
+        status = "review" if references else "error"
         report.add({"section": "Нумерация страниц", "property": "PAGE"},
-                   "В колонтитулах не найден автоматический номер страницы.",
-                   "Проверьте нумерацию в Word. Номера должны идти подряд и находиться справа внизу. "
-                   "Если нумерации нет, добавьте её через вставку номера страницы.", "review")
+                   "В документе нет автоматических номеров страниц.",
+                   "Добавьте номера: «Вставка» → «Номер страницы» → «Внизу страницы», справа. "
+                   "Номера должны идти подряд.", status)
 
 
 @rule("F12")
@@ -172,8 +176,8 @@ def list_references(model, report):
                 report.add(p, f"Ссылка «{match[0]}» содержит закрывающую скобку.",
                        "Уберите закрывающую скобку после номера или буквы пункта в ссылке.")
             if label not in numbers | list_labels:
-                report.add(p, f"Адресат ссылки «{match[0]}» не найден среди распознанных элементов.",
-                           "Проверьте номер или букву и наличие адресуемого элемента.", "review")
+                report.add(p, f"Ссылка «{match[0]}» ведёт на пункт, которого нет в документе.",
+                           "Проверьте номер или букву пункта в ссылке.", "review")
 
 
 @rule("F29")
@@ -198,15 +202,14 @@ def appendix_numbers(model, report):
             letter = match[1].upper()
             if letter not in known:
                 report.add(p, f"В тексте есть ссылка на приложение {letter}, но такое приложение не найдено.",
-                           "Проверьте наличие приложения и исправьте букву в ссылке. "
-                           "Используйте русскую прописную букву.",
+                           f"Добавьте приложение {letter} или исправьте букву в ссылке.",
                            "error" if model.main_complete else "review")
             elif letter not in references:
                 references.append(letter)
     for letter, p in known.items():
         if letter not in references:
-            report.add(p, f"Ссылка на приложение {letter} в распознанном основном тексте не найдена.",
-                       "Добавьте ссылку на приложение в основном тексте.", "error" if model.main_complete else "review")
+            report.add(p, f"В основном тексте нет ссылки на приложение {letter}.",
+                       f"Добавьте ссылку в текст, например «в приложении {letter}».", "error" if model.main_complete else "review")
     actual_order = [p.appendix for p in model.appendices if p.appendix in references]
     if references != actual_order:
         report.add(model.appendices, "Порядок приложений отличается от порядка первых ссылок.",
@@ -221,7 +224,7 @@ def appendix_heading(model, report):
     for app in model.appendices:
         designation = (app.display_text.strip() or app.text.strip()).splitlines()[0]
         if designation != designation.upper():
-            report.add(app, "Обозначение приложения отображается не полностью прописными.",
+            report.add(app, "Обозначение приложения написано не только прописными буквами.",
                        f"Напишите «ПРИЛОЖЕНИЕ {app.appendix}» прописными.")
         if app.props["alignment"] != "center":
             report.add(app, "Обозначение приложения не выровнено по центру.", "Выровняйте обозначение по центру.",
@@ -253,12 +256,12 @@ def appendix_heading(model, report):
         title_index = 1 if re.fullmatch(r"\([^()]+\)", status_text) else 0
         title = rows[title_index][0] if len(rows) > title_index else None
         if title is None or title.kind not in ("appendix_heading", "appendix_title", "appendix_meta", "text"):
-            report.add(app, "Заголовок приложения после обозначения и статуса не распознан.",
-                       "Проверьте, есть ли заголовок приложения. Разместите его отдельной строкой ниже статуса.", "review")
+            report.add(app, "Под строкой статуса не найден заголовок приложения.",
+                       "Проверьте заголовок приложения: он стоит отдельной строкой ниже статуса.", "review")
         else:
             first = next((c for c in rows[title_index][2] if c.isalpha()), "")
             if first.islower():
-                report.add(title, "Заголовок приложения начинается со строчной.", "Начните заголовок с прописной буквы.")
+                report.add(title, "Заголовок приложения начинается со строчной буквы.", "Начните заголовок с прописной буквы.")
             if (title is not app and (title is not status or not valid_status) and
                     title.props["alignment"] != "center"):
                 report.add(title, "Заголовок приложения не выровнен по центру.", "Выровняйте заголовок по центру.",
@@ -273,10 +276,10 @@ def bibliography_heading(model, report):
     for p in headers:
         check_zero_indent(p, report)
         if cap_errors(p):
-            report.add(p, "Заголовок библиографии отображается не прописными.",
+            report.add(p, "Заголовок списка источников написан не только прописными буквами.",
                        "Напишите «СПИСОК ИСПОЛЬЗОВАННЫХ ИСТОЧНИКОВ» прописными.")
         if p.props["alignment"] != "center":
-            report.add(p, "Заголовок библиографии не по центру.", "Выровняйте заголовок по центру.",
+            report.add(p, "Заголовок списка источников не выровнен по центру.", "Выровняйте заголовок по центру.",
                        prop="unnumbered_heading_alignment")
         if any(a.index < p.index for a in model.appendices):
             report.add(p, "Список источников расположен после начала приложений.",

@@ -8,6 +8,16 @@ from ..model import Diagnostic
 
 LOG = logging.getLogger("formal_check")
 APP_ALPHABET = "АБВГДЕЖИКЛМНПРСТУФХЦШЩЭЮЯ"
+FIRST_LINE_ACTION = ("В окне «Абзац» для первой строки выберите «Отступ» на 1,25 или 1,27 см. "
+                     "Пробелы и табуляция не подходят.")
+
+
+def page_section(model, index, *details):
+    """Word calls sectPr a «раздел»; omit the number for a single-section document."""
+    parts = ["Параметры страницы"]
+    if len(model.document.sections) > 1:
+        parts.append(f"раздел Word {index}")
+    return ", ".join(parts + list(details))
 
 
 def ordinary(model):
@@ -34,20 +44,39 @@ def good_indent(value):
     return value is not None and any(abs(value - mm * 1440 / 25.4) <= 1 for mm in FIRST_LINE_MM)
 
 
-def check_indent(p, report):
+def first_line_target(model):
+    """The allowed first-line indent this document already uses most often.
+
+    Both 12,5 and 12,7 mm are allowed. Correcting to the prevailing one keeps
+    the document uniform; with no evidence or a tie, 12,5 mm is used.
+    """
+    if model.first_line_target is None:
+        counts = dict.fromkeys(FIRST_LINE_MM, 0)
+        for p in ordinary(model):
+            value = indent(p)
+            for mm in FIRST_LINE_MM:
+                if value is not None and abs(value - mm * 1440 / 25.4) <= 1:
+                    counts[mm] += 1
+        best = max(FIRST_LINE_MM, key=lambda mm: (counts[mm], mm == FIRST_LINE_MM[0]))
+        model.first_line_target = mm_to_twips(best)
+    return model.first_line_target
+
+
+def check_indent(model, p, report):
     actual = indent(p)
     if actual is None:
         LOG.info("%s: отступ задан в знаках; перевод в миллиметры требует раскладки.", report.rule)
     elif not good_indent(actual):
-        fact = (f"Отступ первой строки — {format_number(actual * 25.4 / 1440)} мм."
-                if actual >= 0 else
-                f"Вместо отступа задан выступ первой строки на {format_number(-actual * 25.4 / 1440)} мм.")
-        report.add(p, fact,
-                   "В настройках абзаца установите отступ первой строки 12,5 или 12,7 мм "
-                   "(1,25 или 1,27 см). Пробелы и табуляция не заменяют эту настройку.",
+        if actual == 0:
+            fact = "У абзаца нет отступа первой строки."
+        elif actual > 0:
+            fact = f"Отступ первой строки: {format_number(actual * 2.54 / 1440)} см."
+        else:
+            fact = f"Вместо отступа первой строки задан выступ {format_number(-actual * 2.54 / 1440)} см."
+        report.add(p, fact, FIRST_LINE_ACTION,
                    prop="first_line_indent",
                    diagnostic=(Diagnostic("paragraph_first_line_indent", p, "first_line_indent",
-                                          actual, mm_to_twips(FIRST_LINE_MM[0]))
+                                          actual, first_line_target(model))
                                if report.rule in ("F04", "F05") else None))
 
 
@@ -109,7 +138,7 @@ def numbering_check(items, report, label, allow_continuations=False, gap_status=
         parts = number.split(".")
         if p.appendix:
             if len(parts) != 2 or parts[0] != p.appendix or not parts[1].isdigit():
-                report.add(p, f"Номер {label} — {number}.",
+                report.add(p, f"Номер {label}: {number}.",
                            f"В приложении {p.appendix} указывайте букву приложения перед номером, например {p.appendix}.1.")
                 continue
         elif not all(s.isdigit() for s in parts) or len(parts) not in (1, 2):

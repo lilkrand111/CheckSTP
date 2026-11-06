@@ -17,9 +17,15 @@ export const PROPERTIES = {
   space_before: "Интервал перед абзацем", space_after: "Интервал после абзаца",
   font_name: "Шрифт", font_size: "Размер шрифта", bold: "Полужирное начертание",
   page_width: "Ширина страницы", page_height: "Высота страницы",
-  heading_indentation: "Отступы заголовка", heading_gap: "Интервал после заголовка",
+  heading_indentation: "Отступы заголовка", heading_gap: "Промежуток после заголовка",
+  subsection_indentation: "Отступы заголовка подраздела",
   text_alignment: "Выравнивание текста", unnumbered_heading_alignment: "Выравнивание заголовка",
-  PAGE: "Поле номера страницы",
+  heading_alignment: "Выравнивание заголовка", heading_left_indent: "Отступ слева",
+  heading_right_indent: "Отступ справа", heading_first_line_indent: "Отступ первой строки",
+  heading_bold: "Полужирный шрифт", heading_continuation: "Перенос заголовка",
+  figure_caption_gap: "Промежуток до подписи рисунка", page_numbering: "Нумерация страниц",
+  cell_value: "Содержимое ячейки", footnote_text: "Текст сноски",
+  PAGE: "Номер страницы",
   top_margin: "Верхнее поле", bottom_margin: "Нижнее поле", left_margin: "Левое поле", right_margin: "Правое поле",
 };
 
