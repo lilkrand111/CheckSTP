@@ -76,7 +76,7 @@ function render() {
   $('upload-zone').classList.toggle('has-file', Boolean(selectedFile));
   $('selected-filename').hidden = !selectedFile; $('selected-filename').textContent = selectedFile?.name || '';
   $('upload-label').textContent = selectedFile ? 'Сменить' : 'Выбрать DOCX';
-  $('upload-subtitle').textContent = selectedFile ? 'Выберите другой DOCX или перетащите его сюда.' : 'или перетащите документ сюда';
+  $('upload-subtitle').textContent = selectedFile ? 'Выберите другой DOCX или перетащите его в это окно.' : 'или перетащите документ в это окно';
   $('start-check').disabled = !selectedFile || Boolean(store.validate(selectedFile)) || Boolean(store.admissionError());
   if (!entry || mode !== 'report') return;
   if (data?.document_id && new URL(location.href).searchParams.get('document') !== data.document_id) {
@@ -146,13 +146,17 @@ $('status').addEventListener('change', event => { if (current()) { current().fil
 $('hide-done').addEventListener('change', event => { if (current()) { current().filters.hideDone = event.target.checked; render(); } });
 $('reset-filters').addEventListener('click', resetFilters);
 $('empty-action').addEventListener('click', () => { if ($('empty-action').dataset.action === 'show' && current()) { current().filters.hideDone = false; render(); } else resetFilters(); $('search').focus(); });
-for (const id of ['upload-zone', 'hero']) {
-  const zone = $(id); let depth = 0;
-  zone.addEventListener('dragenter', event => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); depth++; zone.classList.add('dragging'); });
-  zone.addEventListener('dragover', event => event.preventDefault());
-  zone.addEventListener('dragleave', () => { if (--depth <= 0) zone.classList.remove('dragging'); });
+// A file can be dropped anywhere on the upload screen (the whole sky frame) or on the landing hero.
+// The dashed zone highlights while a file is over the upload screen.
+for (const [id, highlightId, active] of [['application', 'upload-zone', () => mode === 'upload'], ['hero', 'hero', () => true]]) {
+  const zone = $(id), highlight = $(highlightId); let depth = 0;
+  const files = event => event.dataTransfer?.types?.includes('Files') && active();
+  zone.addEventListener('dragenter', event => { if (!files(event)) return; event.preventDefault(); depth++; highlight.classList.add('dragging'); });
+  zone.addEventListener('dragover', event => { if (files(event)) event.preventDefault(); });
+  zone.addEventListener('dragleave', event => { if (files(event) && --depth <= 0) { depth = 0; highlight.classList.remove('dragging'); } });
   zone.addEventListener('drop', event => {
-    event.preventDefault(); depth = 0; zone.classList.remove('dragging');
+    if (!files(event)) return;
+    event.preventDefault(); depth = 0; highlight.classList.remove('dragging');
     if (event.dataTransfer.files.length !== 1) { uploadError = 'Перетащите один DOCX-файл. Следующий можно загрузить отдельно.'; navigate('upload'); return; }
     choose(event.dataTransfer.files[0]);
   });

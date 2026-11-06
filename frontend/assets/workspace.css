@@ -1,5 +1,5 @@
 .application {
-  --column-height:clamp(460px,calc(100svh - 309px),1100px);
+  --column-height:clamp(560px,calc(100svh - 309px),1100px);
   --ink:#19201e;
   --muted:#66716c;
   --lime:#cef46a;
@@ -470,7 +470,7 @@
   background:#ffffffb0;
   border-radius:20px;
   min-width:0;
-  height:var(--column-height);
+  min-height:var(--column-height);
   display:flex;
   flex-direction:column
 }
@@ -483,7 +483,11 @@
   letter-spacing:-.01em;
   padding:0 8px 12px
 }
+/* The list never sets the row height (height 0 + flex-grow): it fills the row
+   that the detail card defines and scrolls inside it. */
 .findings {
+  flex:1 1 0;
+  height:0;
   overflow:auto;
   min-height:0;
   scrollbar-width:thin;
@@ -554,9 +558,11 @@
 .details-slot {
   min-width:0
 }
+/* The detail card grows with its content instead of scrolling inside. */
 .finding-detail {
-  height:var(--column-height);
-  overflow:auto;
+  min-height:var(--column-height);
+  height:100%;
+  overflow:visible;
   scrollbar-width:thin;
   scrollbar-color:#6e7e66 #dce7e1;
   padding:20px 24px;
@@ -664,7 +670,7 @@
 }
 /* Третья колонка: текст по центру, как в кадрах 03, 05 и 07. */
 .document-actions {
-  height:var(--column-height);
+  min-height:var(--column-height);
   border-radius:20px;
   background:#fff;
   padding:24px 20px;
@@ -1006,7 +1012,7 @@
     min-width:180px
   }
   .finding-detail,.findings-column {
-    height:440px
+    min-height:560px
   }
   .empty-state {
     min-height:440px
@@ -1180,6 +1186,8 @@
     border-radius:20px
   }
   .findings {
+    flex:none;
+    height:auto;
     overflow:visible;
     padding:0
   }
@@ -1189,6 +1197,7 @@
   }
   .finding-row>.finding-detail {
     display:block;
+    min-height:0;
     grid-column:1/-1;
     height:auto;
     max-height:none;
