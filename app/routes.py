@@ -1,16 +1,22 @@
-"""Session-owned document API with permanent storage and no deletion routes."""
+"""Process each upload in memory and return its complete result."""
 import asyncio
 import json
-from pathlib import Path
-from urllib.parse import quote
+import secrets
 
 from fastapi import APIRouter, Request
 from starlette.datastructures import UploadFile
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.formparsers import MultiPartException, MultiPartParser
+from starlette.requests import ClientDisconnect
+from starlette.responses import Response
 
+from formal_check.report import validate_report
 from .runner import ProcessingError
 
 router = APIRouter()
+UPLOAD = {"requestBody": {"required": True, "content": {"multipart/form-data": {"schema": {
+    "type": "object", "required": ["file"], "properties": {"file": {"type": "string", "format": "binary"}},
+}}}}}
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 @router.get("/health", include_in_schema=False)
@@ -19,76 +25,72 @@ async def health():
 
 
 @router.get("/api/session")
-async def session(request: Request):
+async def session(request: Request, response: Response):
     settings, sessions = request.app.state.settings, request.app.state.sessions
-    response = JSONResponse({})
     owner = sessions.establish(request, response, settings.cookie_secure)
-    response.body = json.dumps({
-        "csrf_token": sessions.token(owner),
-        "max_upload_bytes": settings.max_upload_bytes,
-        "max_concurrent_jobs": settings.max_concurrent_jobs,
-        "retention_hours": None,
-    }).encode()
-    response.headers["content-length"] = str(len(response.body))
-    return response
+    return {"csrf_token": sessions.token(owner), "max_upload_bytes": settings.max_upload_bytes,
+            "max_concurrent_jobs": settings.max_concurrent_jobs}
 
 
-@router.post("/api/documents", status_code=201, openapi_extra={
-    "requestBody": {"required": True, "content": {"multipart/form-data": {"schema": {
-        "type": "object", "required": ["file"],
-        "properties": {"file": {"type": "string", "format": "binary"}},
-    }}}},
-})
-async def upload(request: Request):
-    owner = request.app.state.sessions.authorize_mutation(request)
+async def process(request, operation):
+    state = request.app.state
+    state.sessions.authorize_mutation(request)
     host = request.client.host if request.client else "unknown"
-    request.app.state.rate_limiter.check(host)
-    service = request.app.state.service
-    # Admission happens before multipart parsing, including its disk spooling.
-    # No body is read while every worker is busy, but a processing slot is taken
-    # only after the body has arrived: a stalled upload must not hold one.
-    service.require_free_slot()
-    with request.app.state.receive_gate.admit(host):
-        form = await request.form(max_files=1, max_fields=0, max_part_size=1024 * 1024)
-    try:
-        file = form.get("file")
-        if not isinstance(file, UploadFile) or len(form.multi_items()) != 1:
+    state.rate_limiter.check(host)
+    state.service.require_free_slot()
+    with state.receive_gate.admit(host):
+        if request.headers.get("content-type", "").split(";")[0].lower() != "multipart/form-data":
             raise ProcessingError("missing_file", "Выберите один DOCX-файл.", 422)
-        async with service.slot():
-            return await service.upload(file, owner)
-    finally:
-        await form.close()
-
-
-@router.get("/api/documents/{document_id}")
-async def document(document_id: str, request: Request):
-    owner = request.app.state.sessions.owner(request)
-    service = request.app.state.service
-    return service.view(service.access(document_id, owner))
-
-
-@router.post("/api/documents/{document_id}/fix")
-async def fix(document_id: str, request: Request):
-    owner = request.app.state.sessions.authorize_mutation(request)
-    request.app.state.rate_limiter.check(request.client.host if request.client else "unknown")
-    return await request.app.state.service.fix(document_id, owner)
-
-
-@router.get("/api/documents/{document_id}/download")
-async def download(document_id: str, request: Request):
-    owner = request.app.state.sessions.owner(request)
-    service = request.app.state.service
-    metadata, stream = service.begin_download(document_id, owner)
-
-    async def chunks():
+        parser = MultiPartParser(request.headers, request.stream(), max_files=1, max_fields=0)
+        # The middleware caps the entire request. Never roll the spool onto disk.
+        parser.spool_max_size = 0
         try:
-            while chunk := await asyncio.to_thread(stream.read, 256 * 1024):
-                yield chunk
+            form = await parser.parse()
+        except MultiPartException:
+            raise ProcessingError("invalid_upload", "Выберите один DOCX-файл.", 400) from None
+        try:
+            file = form.get("file")
+            if not isinstance(file, UploadFile) or len(form.multi_items()) != 1:
+                raise ProcessingError("missing_file", "Выберите один DOCX-файл.", 422)
+            if not (file.filename or "").lower().endswith(".docx"):
+                raise ProcessingError("unsupported_format", "Поддерживаются только файлы .docx.", 415)
+            if not file.size:
+                raise ProcessingError("empty_file", "Выбран пустой файл.", 422)
+            if file.size > state.settings.max_upload_bytes:
+                raise ProcessingError("file_too_large", "Файл превышает допустимый размер.", 413)
+            content = await file.read()
         finally:
-            service.end_download(document_id, stream)
+            await form.close()
+    async with state.service.slot():
+        job = asyncio.create_task(state.service.runner.run(content, operation))
+        try:
+            while not job.done():
+                await asyncio.wait({job}, timeout=0.25)
+                if not job.done() and await request.is_disconnected():
+                    raise ClientDisconnect()
+            metadata, corrected = job.result()
+        finally:
+            if not job.done():
+                job.cancel()
+                await asyncio.gather(job, return_exceptions=True)
+        validate_report(json.loads(metadata)["report"])
+        if operation == "check":
+            return Response(metadata, media_type="application/json")
+        # Browser Response.formData() reads both parts without a ZIP/JS dependency.
+        boundary = secrets.token_hex(24)
+        body = b"".join([
+            f'--{boundary}\r\nContent-Disposition: form-data; name="result"\r\n\r\n'.encode(), metadata,
+            f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="corrected.docx"\r\nContent-Type: {DOCX}\r\n\r\n'.encode(),
+            corrected, f"\r\n--{boundary}--\r\n".encode(),
+        ])
+        return Response(body, media_type=f"multipart/form-data; boundary={boundary}")
 
-    filename = Path(metadata["original_filename"]).stem + "-исправлено.docx"
-    return StreamingResponse(
-        chunks(), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": "attachment; filename=corrected.docx; filename*=UTF-8''" + quote(filename, safe="")},
-    )
+
+@router.post("/api/documents", openapi_extra=UPLOAD)
+async def check(request: Request):
+    return await process(request, "check")
+
+
+@router.post("/api/documents/fix", openapi_extra=UPLOAD, responses={200: {"content": {"multipart/form-data": {}}}}, response_class=Response)
+async def fix(request: Request):
+    return await process(request, "fix")

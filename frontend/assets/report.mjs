@@ -52,22 +52,6 @@ export function filteredFindings(findings, { status, category, query, hideDone }
     && (!hideDone || !marks.has(index)) && words.every(word => searchableText(finding).includes(word)));
 }
 
-// Indexes are scoped to an exact report digest, never carried across a recheck.
-// The browser stores only the digest and checked indexes, not document excerpts.
-export async function markStorageKey(document) {
-  const scope = [document.document_id, document.current_version, document.checker_version,
-    document.ruleset_version, document.report];
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(scope)));
-  return "norma:marks:v1:" + Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
-}
-
-export function parseMarks(raw, count) {
-  try {
-    const items = JSON.parse(raw);
-    return new Set(Array.isArray(items) ? items.filter(index => Number.isInteger(index) && index >= 0 && index < count) : []);
-  } catch { return new Set(); }
-}
-
 export function retryDelay(error) {
   if (![429, 503].includes(error.status)) return 0;
   const value = Number(error.retryAfter);
@@ -77,7 +61,7 @@ export function retryDelay(error) {
 export function operationErrorMessage(error) {
   if (error.status === 429) return "Слишком много запросов с вашего адреса. Дождитесь окончания паузы и повторите действие вручную.";
   if (error.status === 408) return "Не удалось загрузить файл за отведённое время. Проверьте соединение и повторите загрузку вручную.";
-  if (error.status === 504) return "Проверка или исправление заняли слишком много времени. Если документ уже известен, обновите его статус.";
+  if (error.status === 504) return "Проверка или исправление заняли слишком много времени. Повторите действие вручную.";
   return error.message;
 }
 
@@ -92,6 +76,6 @@ export async function readResponse(response) {
     error.retryAfter = Number(response.headers.get("Retry-After")) || 5;
     throw error;
   }
-  if (!data) throw new Error("Сервер не вернул ожидаемый ответ. Обновите статус документа.");
+  if (!data) throw new Error("Сервер не вернул ожидаемый ответ. Повторите действие вручную.");
   return data;
 }

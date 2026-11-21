@@ -1,18 +1,21 @@
-"""One isolated DOCX operation. Only staging files are written by this process."""
+"""One isolated DOCX operation. DOCX and report bytes travel through anonymous pipes."""
 import argparse
 import ctypes
 import logging
 import math
 import os
-from pathlib import Path, PurePosixPath
+from io import BytesIO
+import json
+from pathlib import PurePosixPath
 import signal
 import sys
 from zipfile import BadZipFile, ZipFile
 
 from formal_check import CheckError, DocumentReadError, check_document
-from formal_fix import FixError, fix_document
+from formal_fix.service import FixError, fix_bytes
 
-from .storage import atomic_json
+from formal_check.coverage import LIMITATIONS
+from formal_check import __version__
 
 
 def validate_package(path):
@@ -53,7 +56,7 @@ def prepare_process(parent_pid, memory_mb, timeout):
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
 
 
-def run_operation(source, work, operation):
+def run_operation(source, operation, ruleset):
     warnings = []
 
     class Capture(logging.Handler):
@@ -66,42 +69,43 @@ def run_operation(source, work, operation):
     logger.setLevel(logging.INFO)
     capture = Capture()
     logger.addHandler(capture)
-    validate_package(source)
-    if operation == "fix":
-        target = work / "corrected.docx"
-        fix_document(source, target)
-    else:
-        target = source
-    report = check_document(target)
-    atomic_json(work / "report.json", report)
-    atomic_json(work / "warnings.json", warnings)
-    logger.removeHandler(capture)
-    return {"ok": True}
+    try:
+        validate_package(BytesIO(source))
+        corrected = fix_bytes(source) if operation == "fix" else None
+        report = check_document(BytesIO(corrected if corrected is not None else source))
+        return {
+            "state": "fixed" if corrected is not None else "checked",
+            "current_version": "corrected" if corrected is not None else "original",
+            "checker_version": __version__, "ruleset_version": ruleset,
+            "report": report, "warnings": warnings,
+            "limitations": [{"rule_id": key, "description": value} for key, value in LIMITATIONS.items()],
+        }, corrected
+    finally:
+        logger.removeHandler(capture)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("operation", choices=("check", "fix"))
-    parser.add_argument("source", type=Path)
-    parser.add_argument("work", type=Path)
+    parser.add_argument("--ruleset", required=True)
     parser.add_argument("--parent-pid", type=int, required=True)
     parser.add_argument("--memory-mb", type=int, required=True)
     parser.add_argument("--timeout", type=float, required=True)
     args = parser.parse_args()
     prepare_process(args.parent_pid, args.memory_mb, args.timeout)
-    logging.basicConfig(level=logging.WARNING)
     try:
-        result = run_operation(args.source, args.work, args.operation)
+        data, corrected = run_operation(sys.stdin.buffer.read(), args.operation, args.ruleset)
+        metadata = json.dumps(data, ensure_ascii=False, allow_nan=False).encode()
+        if len(metadata) + len(corrected or b"") > 64 * 1024 * 1024:
+            raise SystemExit(4)
+        # One JSON line followed by the optional binary DOCX.
+        sys.stdout.buffer.write(metadata + b"\n")
+        if corrected is not None:
+            sys.stdout.buffer.write(corrected)
     except DocumentReadError:
-        logging.exception("Invalid DOCX")
-        result = {"ok": False, "code": "invalid_document", "message": "Не удалось прочитать DOCX. Проверьте формат файла и ограничения размера; документы с макросами не поддерживаются."}
+        raise SystemExit(2)
     except (CheckError, FixError, MemoryError):
-        logging.exception("Document processing failed")
-        result = {"ok": False, "code": "processing_failed", "message": "Не удалось завершить обработку документа. Исходный файл сохранён."}
-    except Exception:
-        logging.exception("Unexpected worker failure")
-        result = {"ok": False, "code": "processing_failed", "message": "Внутренняя ошибка обработки документа. Исходный файл сохранён."}
-    atomic_json(args.work / "result.json", result)
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":

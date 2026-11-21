@@ -1,5 +1,5 @@
 import { DocumentAPI } from './api.mjs';
-import { markStorageKey, parseMarks, retryDelay, operationErrorMessage, PERMANENT_UPLOAD_ERRORS } from './report.mjs';
+import { retryDelay, operationErrorMessage, PERMANENT_UPLOAD_ERRORS } from './report.mjs';
 
 export const defaultFilters = () => ({ status: 'all', category: 'all', query: '', hideDone: false });
 export const isBusy = entry => Boolean(entry?.operation || ['checking', 'fixing'].includes(entry?.data?.state));
@@ -12,10 +12,9 @@ export class DocumentStore {
   pausedUntil = 0;
   sessionError = '';
   sequence = 0;
-  constructor({ api = new DocumentAPI(), changed = () => {}, storage = globalThis.localStorage } = {}) {
+  constructor({ api = new DocumentAPI(), changed = () => {} } = {}) {
     this.api = api;
     this.changed = changed;
-    this.storage = storage;
   }
   get session() { return this.api.session; }
   get paused() { return this.pausedUntil > Date.now(); }
@@ -43,49 +42,29 @@ export class DocumentStore {
     return '';
   }
   entry(key, filename) {
-    const entry = { key, filename, data: null, operation: null, error: '', marks: new Set(), markKey: null,
-      reportScope: null, revision: 0, filters: defaultFilters(), selectedFinding: null, expanded: new Set(), timer: null,
+    const entry = { key, filename, data: null, operation: null, error: '', marks: new Set(),
+      revision: 0, filters: defaultFilters(), selectedFinding: null, expanded: new Set(),
       errorStatus: null, uploadPercent: null, fixSummary: null };
     this.documents.set(key, entry);
     return entry;
   }
   async adopt(entry, data) {
-    const scope = data.report ? JSON.stringify([data.document_id, data.current_version, data.checker_version, data.ruleset_version, data.report]) : null;
-    if (scope !== entry.reportScope) {
-      entry.marks = new Set(); entry.markKey = null; entry.selectedFinding = null; entry.expanded.clear();
-      entry.filters = defaultFilters(); entry.storageUnavailable = false;
-      if (data.report) {
-        try {
-          entry.markKey = await markStorageKey(data);
-          entry.marks = parseMarks(this.storage.getItem(entry.markKey), data.report.findings.length);
-        } catch { entry.storageUnavailable = true; }
-      }
-      entry.reportScope = scope; entry.revision++;
-    }
-    entry.data = data; entry.filename = data.filename; this.changed();
+    entry.marks.clear(); entry.expanded.clear(); entry.selectedFinding = null;
+    entry.filters = defaultFilters(); entry.revision++;
+    entry.data = data; this.changed();
   }
   mark(entry, index, checked) {
     if (isFixing(entry) || !entry.data?.report || !Number.isInteger(index) || index < 0 || index >= entry.data.report.findings.length) return;
     if (checked) entry.marks.add(index); else entry.marks.delete(index);
-    try {
-      if (!entry.markKey) throw new Error('No persistent report scope');
-      this.storage.setItem(entry.markKey, JSON.stringify([...entry.marks]));
-    } catch { entry.storageUnavailable = true; }
     this.changed();
   }
-  async error(entry, error, upload = false) {
+  async error(entry, error) {
     entry.errorStatus = error.status ?? null;
     entry.error = operationErrorMessage(error);
-    if (error instanceof TypeError) entry.error = upload
-      ? 'Соединение прервалось. Документ мог сохраниться на сервере. Повторная загрузка создаст ещё одну копию. Автоматического повтора нет.'
-      : 'Соединение прервалось. Обновите статус, чтобы узнать результат операции.';
-    if ([401, 404].includes(error.status)) {
-      entry.data = null; entry.marks.clear(); entry.reportScope = null; entry.markKey = null;
-    }
-    if (error.status === 404) entry.error = 'Документ недоступен в этой сессии. Откройте его в прежнем браузере или загрузите файл заново. Это не означает удаления файла с сервера.';
+    if (error instanceof TypeError) entry.error = 'Соединение прервалось. Повторите действие вручную.';
     if ([401, 403].includes(error.status)) {
       const connected = await this.connect();
-      entry.error = connected ? 'Сессия обновлена. Повторите действие вручную. Потеря прежней cookie не позволяет восстановить доступ к старому документу.' : this.sessionError;
+      entry.error = connected ? 'Сессия обновлена. Повторите действие вручную.' : this.sessionError;
     }
     if ([429, 503].includes(error.status)) {
       const seconds = retryDelay(error);
@@ -109,59 +88,28 @@ export class DocumentStore {
         const percent = Math.min(100, Math.floor(fraction * 100));
         if (percent !== entry.uploadPercent) { entry.uploadPercent = percent; this.changed(); }
       };
-      try { await this.adopt(entry, await this.api.upload(file, progress)); entry.file = null; }
-      catch (error) { await this.error(entry, error, true); }
+      try { await this.adopt(entry, await this.api.upload(file, progress)); }
+      catch (error) { await this.error(entry, error); }
       finally { entry.operation = null; this.changed(); }
     })();
     this.changed();
     return entry;
   }
-  poll(entry) {
-    clearTimeout(entry.timer);
-    if (['checking', 'fixing'].includes(entry.data?.state)) entry.timer = setTimeout(() => this.refresh(entry, true), 1800);
-  }
-  async refresh(entry, polling = false) {
-    if (!entry?.data?.document_id || entry.refreshing || entry.operation) return;
-    clearTimeout(entry.timer); entry.refreshing = true;
-    if (!polling) entry.error = '';
-    this.changed();
-    try {
-      await this.adopt(entry, await this.api.get(entry.data.document_id));
-      entry.error = ''; this.poll(entry);
-    } catch (error) { await this.error(entry, error); }
-    finally { entry.refreshing = false; this.changed(); }
-  }
-  async open(id) {
-    const entry = [...this.documents.values()].find(item => item.data?.document_id === id) || this.entry(id, 'Открываем документ…');
-    entry.data ||= { document_id: id, state: 'checking' };
-    return entry;
-  }
   async fix(entry) {
-    if (!entry?.data?.report || isBusy(entry) || entry.refreshing || entry.data.current_version === 'corrected') return;
+    if (!entry?.data?.report || isBusy(entry) || entry.data.current_version === 'corrected') return;
     const problem = this.admissionError();
     if (problem) { entry.error = problem; this.changed(); return; }
-    entry.operation = 'fixing'; entry.error = ''; clearTimeout(entry.timer); this.changed();
+    entry.operation = 'fixing'; entry.error = ''; this.changed();
     try {
-      await this.adopt(entry, await this.api.get(entry.data.document_id));
-      if (entry.data.current_version === 'corrected') return;
-      if (['checking', 'fixing'].includes(entry.data.state)) { this.poll(entry); return; }
-      const before = entry.data.report?.findings.length;
-      await this.adopt(entry, await this.api.fix(entry.data.document_id));
+      const before = entry.data.report.findings.length;
+      await this.adopt(entry, await this.api.fix(entry.file));
       // Counts of findings in the two reports, not a number of applied operations.
       if (Number.isInteger(before) && entry.data.current_version === 'corrected' && entry.data.report) entry.fixSummary = { before, after: entry.data.report.findings.length };
     } catch (error) {
       await this.error(entry, error);
-      if (entry.data && ![401, 403, 404].includes(error.status)) {
-        try {
-          await this.adopt(entry, await this.api.get(entry.data.document_id));
-          if (entry.data.current_version === 'corrected') entry.error = '';
-          this.poll(entry);
-        } catch (recovery) { if ([401, 403, 404].includes(recovery.status)) await this.error(entry, recovery); }
-      }
     } finally { entry.operation = null; this.changed(); }
   }
   dispose() {
     clearTimeout(this.pauseTimer);
-    for (const entry of this.documents.values()) clearTimeout(entry.timer);
   }
 }

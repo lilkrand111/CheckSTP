@@ -1,5 +1,6 @@
 """Application factory. One API process supervises multiple document processes."""
 from contextlib import asynccontextmanager
+import secrets
 import logging
 from pathlib import Path
 
@@ -26,17 +27,15 @@ def create_app(settings=None):
     @asynccontextmanager
     async def lifespan(application):
         service = Service(settings)
-        with service.storage.instance_lock():
-            service.storage.recover()
-            application.state.settings = settings
-            application.state.service = service
-            application.state.sessions = Sessions(settings.secret or service.storage.local_secret())
-            application.state.rate_limiter = RateLimiter(settings)
-            application.state.receive_gate = ReceiveGate(settings)
-            try:
-                yield
-            finally:
-                await service.runner.close()
+        application.state.settings = settings
+        application.state.service = service
+        application.state.sessions = Sessions(settings.secret or secrets.token_urlsafe(48))
+        application.state.rate_limiter = RateLimiter(settings)
+        application.state.receive_gate = ReceiveGate(settings)
+        try:
+            yield
+        finally:
+            await service.runner.close()
 
     application = FastAPI(title="API проверки технической документации", version="0.1.0",
                           lifespan=lifespan, docs_url=None, redoc_url=None,
@@ -66,7 +65,7 @@ def create_app(settings=None):
 
     @application.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception):
-        LOG.exception("Unexpected API error")
+        LOG.error("Unexpected API error")
         return JSONResponse({"error": {"code": "internal_error", "message": "Внутренняя ошибка сервера. Повторите попытку позже."}}, status_code=500)
 
     return application

@@ -16,7 +16,7 @@ export class DocumentAPI {
   }
   upload(file, onProgress = () => {}) {
     const body = new FormData();
-    body.append('file', file, file.name);
+    body.append('file', file, 'document.docx');
     if (typeof XMLHttpRequest !== 'function') return this.request('/api/documents', { method: 'POST', body });
     // fetch cannot report how much of the body has been sent; XMLHttpRequest can.
     return new Promise((resolve, reject) => {
@@ -35,16 +35,20 @@ export class DocumentAPI {
       xhr.send(body);
     });
   }
-  path(id) { return `/api/documents/${encodeURIComponent(id)}`; }
-  get(id) { return this.request(this.path(id)); }
-  fix(id) { return this.request(`${this.path(id)}/fix`, { method: 'POST' }); }
-  async download(data) {
-    if (data.download_url !== `${this.path(data.document_id)}/download`) throw new Error('Ссылка на проверенную копию недоступна. Обновите статус.');
-    const response = await fetch(data.download_url, { credentials: 'same-origin' });
+  async fix(file) {
+    const body = new FormData();
+    body.append('file', file, 'document.docx');
+    const response = await fetch('/api/documents/fix', {
+      method: 'POST', body, credentials: 'same-origin',
+      headers: { 'X-CSRF-Token': this.session.csrf_token },
+    });
     if (!response.ok) await readResponse(response);
-    const encoded = (response.headers.get('Content-Disposition') || '').match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-    let name = 'исправлено.docx';
-    try { if (encoded) name = decodeURIComponent(encoded); } catch { /* Safe fallback. */ }
-    return { name, blob: await response.blob() };
+    const parts = await response.formData();
+    const result = JSON.parse(parts.get('result'));
+    const corrected = parts.get('file');
+    if (!result?.report || result.current_version !== 'corrected' || !(corrected instanceof Blob) || !corrected.size) {
+      throw new Error('Не удалось получить проверенную копию. Повторите исправление.');
+    }
+    return { ...result, corrected };
   }
 }

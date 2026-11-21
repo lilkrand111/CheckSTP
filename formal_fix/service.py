@@ -60,6 +60,24 @@ def _verify_saved(path, model, plan):
             raise FixError(f"Не подтверждено исправление {d.rule_id}: {d.property}.")
 
 
+def fix_bytes(source_bytes):
+    """Build and verify the corrected package entirely in memory."""
+    inspection = inspect_document(BytesIO(source_bytes))
+    with ZipFile(BytesIO(source_bytes)) as package:
+        names = package.namelist()
+        if len(names) != len(set(names)):
+            raise FixError("В DOCX есть повторяющиеся имена частей; исправление неоднозначно.")
+    plan = build_plan(inspection)
+    apply_plan(inspection.model, plan)
+    if plan:
+        target = BytesIO()
+        _write_package(source_bytes, target, inspection.model.document)
+    else:
+        target = BytesIO(source_bytes)
+    _verify_saved(target, inspection.model, plan)
+    return target.getvalue()
+
+
 def fix_document(input_path, output_path):
     """Save a corrected DOCX at output_path and return None.
 
@@ -80,29 +98,16 @@ def fix_document(input_path, output_path):
             source_bytes = source.read_bytes()
         except OSError as exc:
             raise DocumentReadError(f"Не удалось прочитать DOCX: {exc}") from exc
-        inspection = inspect_document(source)
-        # Bind inspection and package copying to exactly the same source bytes.
+        corrected = fix_bytes(source_bytes)
         if source.read_bytes() != source_bytes:
             raise FixError("Исходный DOCX изменился во время проверки. Повторите обработку.")
-        with ZipFile(BytesIO(source_bytes)) as package:
-            names = package.namelist()
-            if len(names) != len(set(names)):
-                raise FixError("В DOCX есть повторяющиеся имена частей; исправление неоднозначно.")
-        plan = build_plan(inspection)
-        apply_plan(inspection.model, plan)
         output.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=output.parent, prefix=".formal-fix-",
                                          suffix=".docx", delete=False) as stream:
             temporary = Path(stream.name)
-        if plan:
-            _write_package(source_bytes, temporary, inspection.model.document)
-        else:
-            temporary.write_bytes(source_bytes)
-        _verify_saved(temporary, inspection.model, plan)
+            stream.write(corrected)
         os.replace(temporary, output)
         temporary = None
-        LOG.info("Выполнено операций: %d. Сохранено: %s. Итоговый отчёт получите через formal_check.",
-                 len(plan), output)
     except (DocumentReadError, CheckError, FixError):
         raise
     except Exception as exc:

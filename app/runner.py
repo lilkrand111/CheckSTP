@@ -1,13 +1,9 @@
 """Concurrent subprocesses with wall-clock timeouts and cancellation cleanup."""
 import asyncio
-import json
-import logging
 import os
 import sys
 
 from .config import ROOT
-
-LOG = logging.getLogger(__name__)
 
 
 class ProcessingError(Exception):
@@ -22,34 +18,35 @@ class Runner:
         self.settings = settings
         self.processes = set()
 
-    async def run(self, source, work, operation):
+    async def run(self, source, operation):
         process = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "app.worker", operation, str(source), str(work),
+            sys.executable, "-m", "app.worker", operation, "--ruleset", self.settings.ruleset_version,
             "--parent-pid", str(os.getpid()),
             "--memory-mb", str(self.settings.worker_memory_mb),
             "--timeout", str(self.settings.processing_timeout),
-            cwd=ROOT, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            cwd=ROOT, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
         self.processes.add(process)
+        exchange = asyncio.create_task(process.communicate(source))
         try:
             try:
-                _, stderr = await asyncio.wait_for(process.communicate(), timeout=self.settings.processing_timeout)
+                output, _ = await asyncio.wait_for(asyncio.shield(exchange), timeout=self.settings.processing_timeout)
             except asyncio.TimeoutError:
                 raise ProcessingError("timeout", "Превышено время обработки. Попробуйте документ меньшего размера.", 504) from None
+            if process.returncode == 2:
+                raise ProcessingError("invalid_document", "Не удалось прочитать DOCX. Проверьте формат файла.", 422)
+            if process.returncode == 4:
+                raise ProcessingError("result_too_large", "Результат превышает предел 64 МиБ.", 422)
             if process.returncode != 0:
-                LOG.error("Worker exited with status %s", process.returncode)
-                raise ProcessingError("worker_failed", "Обработка прервана. Возможно, документ требует слишком много ресурсов.")
-            try:
-                result = json.loads((work / "result.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                raise ProcessingError("worker_failed", "Не удалось получить результат обработки.") from None
-            if not result.get("ok"):
-                LOG.warning("Worker failed: %s; %s", result.get("code"), stderr.decode(errors="replace")[-4000:])
-                raise ProcessingError(result["code"], result["message"], 422 if result["code"] == "invalid_document" else 500)
+                raise ProcessingError("worker_failed", "Не удалось завершить обработку документа.")
+            metadata, separator, corrected = output.partition(b"\n")
+            if not separator or bool(corrected) != (operation == "fix"):
+                raise ProcessingError("worker_failed", "Не удалось получить результат обработки.")
+            return metadata, corrected
         finally:
             if process.returncode is None:
                 process.kill()
-                await process.wait()
+            await asyncio.gather(exchange, return_exceptions=True)
             self.processes.discard(process)
 
     async def close(self):

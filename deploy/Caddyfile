@@ -12,16 +12,6 @@
 {$SITE_ADDRESS} {
 	# Reports are repetitive JSON: compression shrinks them many times over.
 	encode zstd gzip
-	# Access log goes to the container log, which Compose rotates. Caddy redacts
-	# cookies itself; the CSRF token is removed here.
-	log {
-		format filter {
-			wrap json
-			fields {
-				request>headers>X-Csrf-Token delete
-			}
-		}
-	}
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		-Server

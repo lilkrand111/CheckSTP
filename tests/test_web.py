@@ -2,12 +2,10 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import timedelta
 from io import BytesIO
 import json
 import re
 import threading
-import time
 from zipfile import ZipFile
 
 from docx import Document
@@ -17,13 +15,12 @@ import pytest
 
 from app.config import Settings
 from app.main import create_app
-from app.runner import ProcessingError
-from app.storage import Storage, utc_now
+
 
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(storage_dir=tmp_path / "storage", allowed_hosts=("testserver", "localhost", "127.0.0.1"))
+    return Settings(allowed_hosts=("testserver", "localhost", "127.0.0.1"))
 
 
 @pytest.fixture
@@ -51,53 +48,45 @@ def upload(client, data, filename="Пояснительная записка.doc
     return client.post("/api/documents", files={"file": (filename, data, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")})
 
 
-def test_complete_flow_preserves_original_and_rechecks(client, docx_bytes):
-    response = upload(client, docx_bytes)
-    assert response.status_code == 201, response.text
+def test_complete_flow_preserves_original_and_rechecks(client, docx_bytes, monkeypatch, tmp_path):
+    from email import policy
+    from email.parser import BytesParser
+    from formal_check import check_document
+
+    # A real file large enough to cross Starlette's default disk spool threshold.
+    original = BytesIO(docx_bytes)
+    with ZipFile(original, "a") as archive:
+        archive.writestr("synthetic-padding.bin", b"x" * (2 * 1024 * 1024))
+    payload = original.getvalue()
+    import tempfile
+    monkeypatch.setattr(tempfile.SpooledTemporaryFile, "rollover",
+                        lambda self: pytest.fail("Upload spilled to disk"))
+    monkeypatch.chdir(tmp_path)
+    response = upload(client, payload)
+    assert response.status_code == 200, response.text
     data = response.json()
-    document_id = data["document_id"]
-    assert data["state"] == "checked" and data["current_version"] == "original"
-    assert data["expires_at"] is None
-    assert any(item["rule_id"] == "F01" for item in data["report"]["findings"])
+    assert "document_id" not in data and "filename" not in data
+    assert data["report"] == check_document(BytesIO(payload))
     assert len(data["limitations"]) == 31
-    assert "owner_id" not in data
-    directory = client.app.state.service.storage.path(document_id)
-    assert (directory / "original.docx").read_bytes() == docx_bytes
-    assert client.get(f"/api/documents/{document_id}/download").status_code == 409
-    fixed = client.post(f"/api/documents/{document_id}/fix")
-    assert fixed.status_code == 200, fixed.text
-    result = fixed.json()
-    assert result["state"] == "fixed" and result["current_version"] == "corrected"
-    download = client.get(result["download_url"])
-    assert download.status_code == 200
-    assert "attachment" in download.headers["content-disposition"]
-    corrected = Document(BytesIO(download.content))
+    fixed = client.post("/api/documents/fix", files={"file": ("document.docx", payload)})
+    assert fixed.status_code == 200
+    assert fixed.headers["cache-control"] == "no-store"
+    parts = BytesParser(policy=policy.default).parsebytes(
+        b"Content-Type: " + fixed.headers["content-type"].encode() + b"\r\n\r\n" + fixed.content)
+    result, file = [part.get_payload(decode=True) for part in parts.iter_parts()]
+    assert json.loads(result)["report"] == check_document(BytesIO(file))
+    corrected = Document(BytesIO(file))
     assert abs(corrected.sections[0].page_width.mm - 210) < 0.1
-    assert [p.text for p in corrected.paragraphs] == [p.text for p in Document(BytesIO(docx_bytes)).paragraphs]
-    assert (directory / "original.docx").read_bytes() == docx_bytes
-    assert result["report"] == json.loads((directory / "corrected-report.json").read_text())
-    assert client.post(f"/api/documents/{document_id}/fix").json() == result
-    preserved = client_files(directory)
-    assert client.delete(f"/api/documents/{document_id}").status_code == 405
-    assert client_files(directory) == preserved
-    assert client.get(f"/api/documents/{document_id}").json() == result
+    assert [p.text for p in corrected.paragraphs] == [p.text for p in Document(BytesIO(payload)).paragraphs]
+    assert not list(tmp_path.iterdir())
 
 
-def test_cross_session_access_and_csrf(client, docx_bytes):
-    document_id = upload(client, docx_bytes).json()["document_id"]
-    original_cookie = dict(client.cookies)
-    original_token = client.headers["X-CSRF-Token"]
-    client.cookies.clear()
-    client.headers["X-CSRF-Token"] = client.get("/api/session").json()["csrf_token"]
-    for method, suffix in (("GET", ""), ("GET", "/download"), ("POST", "/fix")):
-        assert client.request(method, f"/api/documents/{document_id}{suffix}").status_code == 404
-    assert client.delete(f"/api/documents/{document_id}").status_code == 405
-    client.cookies.update(original_cookie)
+def test_csrf_and_removed_routes(client):
     client.headers["X-CSRF-Token"] = "invalid"
-    assert client.post(f"/api/documents/{document_id}/fix").status_code == 403
-    assert client.delete(f"/api/documents/{document_id}").status_code == 405
-    client.headers["X-CSRF-Token"] = original_token
-    assert client.get(f"/api/documents/{document_id}").status_code == 200
+    for path in ("/api/documents", "/api/documents/fix"):
+        assert client.post(path).status_code == 403
+    assert client.get("/api/documents/old-id").status_code == 404
+    assert client.get("/api/documents/old-id/download").status_code == 404
 
 
 @pytest.mark.parametrize("name,data,status", [("file.pdf", b"text", 415), ("file.docx", b"", 422), ("file.docx", b"not a zip", 422)])
@@ -105,7 +94,6 @@ def test_invalid_uploads(client, name, data, status):
     response = upload(client, data, name)
     assert response.status_code == status, response.text
     assert "error" in response.json()
-    assert str(client.app.state.settings.storage_dir) not in response.text
 
 
 def test_upload_limit_and_chunked_body(settings):
@@ -113,7 +101,6 @@ def test_upload_limit_and_chunked_body(settings):
         client.headers["X-CSRF-Token"] = client.get("/api/session").json()["csrf_token"]
         assert upload(client, b"a" * 101).status_code == 413
         assert upload(client, b"a" * (1024 * 1024 + 101)).status_code == 413
-        assert not list(client.app.state.service.storage.documents.iterdir())
 
 
 def test_missing_and_multiple_files(client, docx_bytes):
@@ -122,36 +109,18 @@ def test_missing_and_multiple_files(client, docx_bytes):
     assert response.status_code == 400
 
 
-def test_failed_fix_keeps_original_report_and_hides_download(client, docx_bytes, monkeypatch):
-    initial = upload(client, docx_bytes).json()
-    document_id = initial["document_id"]
-
-    async def fail(source, work, operation):
-        (work / "corrected.docx").write_bytes(docx_bytes)
-        raise ProcessingError("processing_failed", "Ошибка повторной проверки.")
-
-    monkeypatch.setattr(client.app.state.service.runner, "run", fail)
-    assert client.post(f"/api/documents/{document_id}/fix").status_code == 500
-    current = client.get(f"/api/documents/{document_id}").json()
-    assert current["state"] == "failed"
-    assert current["report"] == initial["report"]
-    assert current["current_version"] == "original" and current["download_url"] is None
-    assert client.get(f"/api/documents/{document_id}/download").status_code == 409
-    assert not (client.app.state.service.storage.path(document_id) / "corrected.docx").exists()
-
-
 def test_two_documents_are_processed_concurrently_and_capacity_is_bounded(client, docx_bytes, monkeypatch):
     service = client.app.state.service
     original_run = service.runner.run
     started, release = threading.Event(), threading.Event()
     active = []
 
-    async def barrier(source, work, operation):
-        active.append(source)
+    async def barrier(source, operation):
+        active.append(id(source))
         if len(active) == 2:
             started.set()
         assert await asyncio.to_thread(release.wait, 10)
-        return await original_run(source, work, operation)
+        return await original_run(source, operation)
 
     monkeypatch.setattr(service.runner, "run", barrier)
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -165,67 +134,7 @@ def test_two_documents_are_processed_concurrently_and_capacity_is_bounded(client
         finally:
             release.set()
         results = [future.result(timeout=15) for future in futures]
-    assert all(result.status_code == 201 for result in results)
-    assert len({result.json()["document_id"] for result in results}) == 2
-
-
-def test_same_document_cannot_be_fixed_twice(client, docx_bytes, monkeypatch):
-    document_id = upload(client, docx_bytes).json()["document_id"]
-    service = client.app.state.service
-    original_run = service.runner.run
-    started, release = threading.Event(), threading.Event()
-
-    async def barrier(source, work, operation):
-        started.set()
-        assert await asyncio.to_thread(release.wait, 10)
-        return await original_run(source, work, operation)
-
-    monkeypatch.setattr(service.runner, "run", barrier)
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(client.post, f"/api/documents/{document_id}/fix")
-        try:
-            assert started.wait(10)
-            assert client.post(f"/api/documents/{document_id}/fix").status_code == 409
-            assert client.delete(f"/api/documents/{document_id}").status_code == 405
-            current = client.get(f"/api/documents/{document_id}").json()
-            assert current["state"] == "fixing" and current["report"]
-        finally:
-            release.set()
-        assert future.result(timeout=15).status_code == 200
-
-
-def test_slow_download_is_not_cut_by_upload_deadlines(settings, docx_bytes, monkeypatch):
-    class SlowStream:
-        """Each read outlasts the pause allowed between parts of an upload."""
-        def __init__(self, stream):
-            self.stream = stream
-
-        @property
-        def closed(self):
-            return self.stream.closed
-
-        def read(self, size):
-            time.sleep(0.3)
-            return self.stream.read(size)
-
-        def close(self):
-            self.stream.close()
-
-    with TestClient(create_app(replace(settings, upload_idle_timeout=0.05))) as client:
-        client.headers["X-CSRF-Token"] = client.get("/api/session").json()["csrf_token"]
-        document_id = upload(client, docx_bytes).json()["document_id"]
-        assert client.post(f"/api/documents/{document_id}/fix").status_code == 200
-        service = client.app.state.service
-        begin_download = service.begin_download
-
-        def slow_download(*args):
-            metadata, stream = begin_download(*args)
-            return metadata, SlowStream(stream)
-
-        monkeypatch.setattr(service, "begin_download", slow_download)
-        response = client.get(f"/api/documents/{document_id}/download")
-        assert response.status_code == 200
-        assert response.content == (service.storage.path(document_id) / "corrected.docx").read_bytes()
+    assert all(result.status_code == 200 for result in results)
 
 
 def test_timeout_kills_worker(settings, docx_bytes):
@@ -233,137 +142,6 @@ def test_timeout_kills_worker(settings, docx_bytes):
         client.headers["X-CSRF-Token"] = client.get("/api/session").json()["csrf_token"]
         assert upload(client, docx_bytes).status_code == 504
         assert not client.app.state.service.runner.processes
-        directory = next(client.app.state.service.storage.documents.iterdir())
-        metadata = json.loads((directory / "metadata.json").read_text())
-        assert metadata["state"] == "failed"
-        assert (directory / "original.docx").read_bytes() == docx_bytes
-        assert not list(directory.glob(".work-*"))
-
-
-def test_restart_persists_session_and_report_and_recovers_interrupted_job(settings, docx_bytes):
-    with TestClient(create_app(settings)) as first:
-        first.headers["X-CSRF-Token"] = first.get("/api/session").json()["csrf_token"]
-        document_id = upload(first, docx_bytes).json()["document_id"]
-        cookies = dict(first.cookies)
-        metadata = first.app.state.service.storage.read(document_id)
-        metadata["state"] = "fixing"
-        first.app.state.service.storage.write(metadata)
-    with TestClient(create_app(settings)) as second:
-        second.cookies.update(cookies)
-        response = second.get(f"/api/documents/{document_id}")
-        assert response.status_code == 200
-        assert response.json()["state"] == "failed"
-        assert response.json()["current_version"] == "original"
-        assert response.json()["last_error"]["code"] == "interrupted"
-
-
-def test_permanent_storage_keeps_old_documents_available(client, docx_bytes):
-    assert client.get("/api/session").json()["retention_hours"] is None
-    data = upload(client, docx_bytes).json()
-    document_id = data["document_id"]
-    service = client.app.state.service
-    metadata = service.storage.read(document_id)
-    assert metadata["expires_at"] is None
-    metadata["created_at"] = (utc_now() - timedelta(days=365)).isoformat()
-    # Even an old, not-yet-normalized deadline must not cause a 410 or deletion.
-    metadata["expires_at"] = (utc_now() - timedelta(days=364)).isoformat()
-    service.storage.write(metadata)
-    response = client.get(f"/api/documents/{document_id}")
-    assert response.status_code == 200
-    assert response.json()["expires_at"] is None
-    assert client.post(f"/api/documents/{document_id}/fix").status_code == 200
-    assert client.get(f"/api/documents/{document_id}/download").status_code == 200
-    assert (service.storage.path(document_id) / "original.docx").read_bytes() == docx_bytes
-
-
-def test_startup_converts_legacy_expired_uploads_to_permanent(settings, docx_bytes):
-    with TestClient(create_app(settings)) as first:
-        first.headers["X-CSRF-Token"] = first.get("/api/session").json()["csrf_token"]
-        data = upload(first, docx_bytes).json()
-        assert data["expires_at"] is None
-        document_id = data["document_id"]
-        assert first.post(f"/api/documents/{document_id}/fix").status_code == 200
-        storage = first.app.state.service.storage
-        directory = storage.path(document_id)
-        preserved = {path.name: path.read_bytes() for path in directory.iterdir() if path.name != "metadata.json"}
-        metadata = storage.read(document_id)
-        metadata["expires_at"] = (utc_now() - timedelta(days=30)).isoformat()
-        storage.write(metadata)
-        cookies = dict(first.cookies)
-    with TestClient(create_app(settings)) as second:
-        second.cookies.update(cookies)
-        response = second.get(f"/api/documents/{document_id}")
-        assert response.status_code == 200
-        assert response.json()["expires_at"] is None
-        assert second.app.state.service.storage.read(document_id)["expires_at"] is None
-        assert second.get(f"/api/documents/{document_id}/download").status_code == 200
-        assert client_files(directory) == preserved
-
-
-def client_files(directory):
-    return {path.name: path.read_bytes() for path in directory.iterdir() if path.name != "metadata.json"}
-
-
-@pytest.mark.parametrize("legacy_value", ["24", "-1", "invalid"])
-def test_old_cleanup_settings_cannot_enable_deletion(settings, docx_bytes, monkeypatch, legacy_value):
-    monkeypatch.setenv("RETENTION_HOURS", legacy_value)
-    monkeypatch.setenv("CLEANUP_INTERVAL_SECONDS", "0.001")
-    configured = Settings(storage_dir=settings.storage_dir, allowed_hosts=settings.allowed_hosts)
-    with TestClient(create_app(configured)) as first:
-        first.headers["X-CSRF-Token"] = first.get("/api/session").json()["csrf_token"]
-        data = upload(first, docx_bytes).json()
-        assert data["expires_at"] is None
-        document_id = data["document_id"]
-        storage = first.app.state.service.storage
-        metadata = storage.read(document_id)
-        metadata["expires_at"] = (utc_now() - timedelta(days=30)).isoformat()
-        storage.write(metadata)
-        cookies = dict(first.cookies)
-    with TestClient(create_app(configured)) as second:
-        second.cookies.update(cookies)
-        assert second.get(f"/api/documents/{document_id}").status_code == 200
-        assert (second.app.state.service.storage.path(document_id) / "original.docx").read_bytes() == docx_bytes
-
-
-def test_invalid_docx_remains_stored_after_failed_check(client):
-    payload = b"unreadable DOCX submitted for processing"
-    assert upload(client, payload).status_code == 422
-    storage = client.app.state.service.storage
-    directory = next(storage.documents.iterdir())
-    assert (directory / "original.docx").read_bytes() == payload
-    assert storage.read(directory.name)["state"] == "failed"
-
-
-def test_interrupted_upload_keeps_received_bytes(client):
-    class InterruptedUpload:
-        filename = "interrupted.docx"
-        size = None
-
-        def __init__(self):
-            self.reads = 0
-
-        async def read(self, amount):
-            self.reads += 1
-            if self.reads == 1:
-                return b"already received bytes"
-            raise ConnectionError("transfer interrupted")
-
-    service = client.app.state.service
-    with pytest.raises(ConnectionError):
-        client.portal.call(service.upload, InterruptedUpload(), "test-owner")
-    directory = next(service.storage.documents.iterdir())
-    assert (directory / ".upload").read_bytes() == b"already received bytes"
-    assert service.storage.read(directory.name)["state"] == "failed"
-    assert not service.operations
-
-
-def test_repeated_uploads_keep_each_original(client, docx_bytes):
-    first = upload(client, docx_bytes).json()["document_id"]
-    second = upload(client, docx_bytes).json()["document_id"]
-    assert first != second
-    storage = client.app.state.service.storage
-    for document_id in (first, second):
-        assert (storage.path(document_id) / "original.docx").read_bytes() == docx_bytes
 
 
 def test_path_traversal_and_private_storage_are_unavailable(client):
@@ -423,12 +201,12 @@ def test_configurable_four_parallel_documents(settings, docx_bytes, monkeypatch)
         started, release = threading.Event(), threading.Event()
         active = []
 
-        async def barrier(source, work, operation):
-            active.append(source)
+        async def barrier(source, operation):
+            active.append(id(source))
             if len(active) == 4:
                 started.set()
             assert await asyncio.to_thread(release.wait, 10)
-            return await original_run(source, work, operation)
+            return await original_run(source, operation)
 
         monkeypatch.setattr(service.runner, "run", barrier)
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -438,36 +216,19 @@ def test_configurable_four_parallel_documents(settings, docx_bytes, monkeypatch)
                 assert len(set(active)) == 4
             finally:
                 release.set()
-            assert all(future.result(timeout=15).status_code == 201 for future in futures)
+            assert all(future.result(timeout=15).status_code == 200 for future in futures)
 
 
-def test_truncated_or_invalid_report_is_not_published(client, docx_bytes, monkeypatch):
-    document_id = upload(client, docx_bytes).json()["document_id"]
+def test_invalid_recheck_never_returns_corrected_file(settings, monkeypatch):
+    async def invalid(source, operation):
+        return b'{"report":{}}', b"private-result"
 
-    async def invalid_report(source, work, operation):
-        (work / "corrected.docx").write_bytes(docx_bytes)
-        (work / "report.json").write_text('{"standard":"СТП 01–2017","findings":', encoding="utf-8")
-
-    monkeypatch.setattr(client.app.state.service.runner, "run", invalid_report)
-    assert client.post(f"/api/documents/{document_id}/fix").status_code == 500
-    current = client.get(f"/api/documents/{document_id}").json()
-    assert current["current_version"] == "original"
-    assert current["download_url"] is None
-    assert current["report"]["findings"]
-
-
-def test_storage_budget_rejects_upload_before_creating_files(settings, docx_bytes):
-    with TestClient(create_app(replace(settings, max_storage_bytes=1024))) as client:
+    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+        monkeypatch.setattr(client.app.state.service.runner, "run", invalid)
         client.headers["X-CSRF-Token"] = client.get("/api/session").json()["csrf_token"]
-        assert upload(client, docx_bytes).status_code == 507
-        assert not list(client.app.state.service.storage.documents.iterdir())
-
-
-def test_second_api_cannot_recover_live_jobs(client):
-    second_storage = Storage(client.app.state.settings.storage_dir)
-    with pytest.raises(RuntimeError, match="MAX_CONCURRENT_JOBS"):
-        with second_storage.instance_lock():
-            pytest.fail("Another API must not enter the same storage")
+        response = client.post("/api/documents/fix", files={"file": ("document.docx", b"input")})
+        assert response.status_code == 500
+        assert b"private-result" not in response.content
 
 
 def test_chunked_upload_limit_is_enforced_without_content_length(settings):
@@ -499,6 +260,27 @@ def test_chunked_upload_limit_is_enforced_without_content_length(settings):
             await application(scope, receive, send)
             assert next(message for message in messages if message["type"] == "http.response.start")["status"] == 413
             assert request_count == 1
-            assert not list(application.state.service.storage.documents.iterdir())
 
     asyncio.run(exercise())
+
+
+def test_restart_leaves_no_document_or_log_markers(settings, tmp_path, monkeypatch, caplog):
+    marker = "synthetic-private-content-1703"
+    filename = "synthetic-private-filename.docx"
+    document = Document()
+    document.core_properties.author = "synthetic-private-author"
+    document.add_paragraph(marker)
+    output = BytesIO()
+    document.save(output)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("STORAGE_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    for _ in range(2):
+        with TestClient(create_app(settings)) as instance:
+            instance.headers["X-CSRF-Token"] = instance.get("/api/session").json()["csrf_token"]
+            assert upload(instance, output.getvalue(), filename).status_code == 200
+            assert upload(instance, marker.encode(), filename).status_code == 422
+            assert instance.get("/api/documents/previous").status_code == 404
+        assert not list(tmp_path.iterdir())
+    for value in (marker, filename, document.core_properties.author):
+        assert value not in caplog.text

@@ -43,8 +43,7 @@ def paragraph_runs(p):
 
 
 def read_document(path):
-    path = Path(path)
-    if path.suffix.lower() != ".docx":
+    if not hasattr(path, "read") and Path(path).suffix.lower() != ".docx":
         raise DocumentReadError("Поддерживается только формат .docx.")
     try:
         with ZipFile(path) as z:
@@ -60,7 +59,7 @@ def read_document(path):
                     parts[name] = parse(z.read(name))
             if any(i.filename.endswith("vbaProject.bin") for i in z.infolist()):
                 raise DocumentReadError("Документы с макросами не поддерживаются.")
-        document = Document(str(path))
+        document = Document(path)
     except DocumentReadError:
         raise
     except Exception as exc:

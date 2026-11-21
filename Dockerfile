@@ -5,16 +5,12 @@ FROM ${PYTHON_IMAGE} AS app-base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    TMPDIR=/tmp/normacheck \
-    STORAGE_DIR=/data \
     FORWARDED_ALLOW_IPS=""
 WORKDIR /app
 COPY requirements.lock ./
 RUN python -m pip install --no-cache-dir -r requirements.lock \
     && groupadd --gid 10001 normacheck \
-    && useradd --uid 10001 --gid 10001 --no-create-home normacheck \
-    && mkdir -p /data /tmp/normacheck \
-    && chown 10001:10001 /data /tmp/normacheck
+    && useradd --uid 10001 --gid 10001 --no-create-home normacheck
 COPY app/ ./app/
 COPY formal_check/ ./formal_check/
 COPY formal_fix/ ./formal_fix/

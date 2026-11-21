@@ -25,7 +25,7 @@ class Clock:
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(storage_dir=tmp_path / "storage", allowed_hosts=("testserver",))
+    return Settings(allowed_hosts=("testserver",))
 
 
 def authorize(client):
@@ -69,26 +69,20 @@ def test_upload_and_fix_share_limit_without_affecting_reads_or_storage(settings)
         authorize(client)
         data = payload()
         response = client.post("/api/documents", files={"file": ("test.docx", data)})
-        assert response.status_code == 201
-        document_id = response.json()["document_id"]
-        assert client.post(f"/api/documents/{document_id}/fix").status_code == 200
-        storage = client.app.state.service.storage
-        before = {path: path.read_bytes() for path in storage.documents.rglob("*") if path.is_file()}
+        assert response.status_code == 200
+        assert client.post("/api/documents/fix", files={"file": ("test.docx", data)}).status_code == 200
         rejected = client.post("/api/documents", files={"file": ("extra.docx", data)})
         assert rejected.status_code == 429
         assert rejected.headers["retry-after"] == "5"
         assert rejected.headers["cache-control"] == "no-store"
         assert rejected.json()["error"]["code"] == "rate_limited"
         assert not client.app.state.service.runner.processes
-        assert before == {path: path.read_bytes() for path in storage.documents.rglob("*") if path.is_file()}
-        assert client.get(f"/api/documents/{document_id}").status_code == 200
-        assert client.get(f"/api/documents/{document_id}/download").status_code == 200
         assert client.get("/health").status_code == 200
         client.cookies.clear()
         authorize(client)
         assert client.post("/api/documents").status_code == 429
         clock.now = 5
-        assert client.post("/api/documents", files={"file": ("second.docx", data)}).status_code == 201
+        assert client.post("/api/documents", files={"file": ("second.docx", data)}).status_code == 200
 
 
 @pytest.mark.parametrize("peer,trusted", [("172.30.76.2", True), ("192.0.2.10", False)])
@@ -103,7 +97,6 @@ def test_proxy_headers_only_change_identity_for_trusted_peer(settings, peer, tru
         response = client.post("/api/documents", headers={"X-Forwarded-For": "198.51.100.2"})
         assert response.status_code == (422 if trusted else 429)
         assert client.post("/api/documents", headers={"X-Forwarded-For": "198.51.100.1"}).status_code == 429
-        assert not list(application.state.service.storage.documents.iterdir())
 
 
 def test_invalid_csrf_does_not_spend_tokens(settings):
@@ -175,8 +168,7 @@ def test_interrupted_multipart_closes_spooled_file_and_releases_slot(settings, m
                 status = next(item["status"] for item in output if item["type"] == "http.response.start")
                 assert status == (413 if failure == "size" else 408)
             assert reads == 2
-            assert files and all(file.closed for file in files)
-            assert not list(application.state.service.storage.documents.iterdir())
+            assert files and all(file.closed and not file._rolled for file in files)
             service = application.state.service
             async with service.slot(), service.slot():
                 with pytest.raises(ProcessingError) as busy:
@@ -260,13 +252,11 @@ def test_stalled_uploads_hold_no_processing_slot(settings):
             assert gate.active.total() == len(tasks)
             assert not service.slots.locked()
             assert await post_upload(application, "192.0.2.1", complete) == 429
-            assert await post_upload(application, "192.0.2.2", complete) == 201
-            assert len(list(service.storage.documents.iterdir())) == 1
+            assert await post_upload(application, "192.0.2.2", complete) == 200
             release.set()
             results = await asyncio.gather(*tasks, return_exceptions=True)
             assert all(isinstance(result, ClientDisconnect) for result in results)
             assert not gate.active
-            assert len(list(service.storage.documents.iterdir())) == 1
 
     asyncio.run(exercise())
 
@@ -287,11 +277,10 @@ def test_busy_workers_after_receiving_reject_without_storing(settings):
                 return await receive()
 
             assert await post_upload(application, "192.0.2.1", receive_while_workers_fill) == 503
-            assert not list(service.storage.documents.iterdir())
             assert not application.state.receive_gate.active
             for _ in range(settings.max_concurrent_jobs):
                 service.slots.release()
-            assert await post_upload(application, "192.0.2.1", receive) == 201
+            assert await post_upload(application, "192.0.2.1", receive) == 200
 
     asyncio.run(exercise())
 
@@ -301,3 +290,34 @@ def test_busy_workers_after_receiving_reject_without_storing(settings):
 def test_invalid_timing_and_rate_settings_are_rejected(settings, name, value):
     with pytest.raises(ValueError):
         replace(settings, **{name: value})
+
+
+def test_disconnect_during_processing_cancels_job_and_releases_slot(settings, monkeypatch):
+    from starlette.requests import ClientDisconnect
+
+    async def exercise():
+        application = create_app(settings)
+        async with application.router.lifespan_context(application):
+            service = application.state.service
+            started, stopped = asyncio.Event(), asyncio.Event()
+
+            async def run(source, operation):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    stopped.set()
+
+            monkeypatch.setattr(service.runner, "run", run)
+
+            async def receive():
+                if started.is_set():
+                    return {"type": "http.disconnect"}
+                return {"type": "http.request", "body": multipart(payload()), "more_body": False}
+
+            with pytest.raises(ClientDisconnect):
+                await asyncio.wait_for(post_upload(application, "192.0.2.1", receive), 3)
+            assert stopped.is_set() and not service.slots.locked()
+            assert not application.state.receive_gate.active
+
+    asyncio.run(exercise())
