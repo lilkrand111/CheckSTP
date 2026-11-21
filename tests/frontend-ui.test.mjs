@@ -196,7 +196,7 @@ test('actual app separates file choice from POST, preserves the selected documen
     assert.equal(get('landing').hidden, false); assert.equal(location.href, 'http://localhost/');
     location.href = 'http://localhost/#report=upload-1'; await events.get('popstate')(); for (let i = 0; i < 15; i++) await setImmediate();
     assert.equal(get('report').hidden, false); assert.equal(get('count-all').textContent, 2);
-    assert.equal(get('document-name').textContent, replacement.name); assert.equal(document.title, `${replacement.name} · NormaCheck`);
+    assert.equal(get('document-name').textContent, replacement.name); assert.equal(document.title, `${replacement.name} · CheckSTP`);
     // Each row names its place, so equal rules stay distinguishable.
     assert.equal(get('findings').children[0].children[1].children[2].textContent, 'Первый абзац');
     assert.equal(get('findings').children[1].children[1].children.length, 2);

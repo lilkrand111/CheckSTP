@@ -16,7 +16,7 @@
 | images/clouds-footer.webp | images/a1d6466ba5e02b5cd082d674f3fd1895a1addcae в Forma.fig | WebP, 1584 × 672 |
 | fonts/InterVariable.woff2 | [Официальный репозиторий Inter](https://github.com/rsms/inter/blob/master/docs/font-files/InterVariable.woff2) | Локальный variable WOFF2, начертания 100–900 |
 | fonts/Inter-LICENSE.txt | [Лицензия Inter](https://github.com/rsms/inter/blob/master/LICENSE.txt) | SIL Open Font License 1.1 |
-| favicon.svg | Кодовый знак N в цветах интерфейса | SVG; используется также в шапке |
+| favicon.svg | Салатовая буква C на голубом фоне | SVG для вкладки браузера |
 
 Облачные изображения взяты из предоставленного дизайн-исходника. Отдельные
 права на исходные фотографии в файле не указаны; внешние стоки не подключались.

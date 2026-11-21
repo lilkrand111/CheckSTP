@@ -1,4 +1,4 @@
-# Контейнеры NormaCheck
+# Контейнеры CheckSTP
 
 Compose запускает FastAPI и Caddy. Наружу опубликованы только порты Caddy.
 Uvicorn доверяет заголовкам прокси только от адреса PROXY_IP в выделенной Docker-сети.

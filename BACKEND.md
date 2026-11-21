@@ -1,4 +1,4 @@
-# Бэкенд NormaCheck
+# Бэкенд CheckSTP
 
 Локальный запуск из корня после установки Python 3.12 и зависимостей из `requirements.lock`:
 

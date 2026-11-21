@@ -64,7 +64,7 @@ function render() {
   $('application').classList.toggle('report-waiting', mode === 'report' && Boolean(entry) && !data?.report);
   $('application').classList.remove('report-empty', 'report-clean', 'report-fixing', 'no-findings');
   const name = mode === 'report' ? entry?.filename || '' : '';
-  document.title = name ? `${name} · NormaCheck` : baseTitle;
+  document.title = name ? `${name} · CheckSTP` : baseTitle;
   $('document-name').textContent = name; $('document-name').hidden = !reportShown || !name;
   $('workspace').hidden = landing;
   // The waiting screen shows the standard badge. A ready report offers a new upload.
