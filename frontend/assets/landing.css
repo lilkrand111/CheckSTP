@@ -60,8 +60,6 @@
   padding:24px 26px 0
 }
 #landing .site-header .brand { font-size:23px; font-weight:600 }
-.hero-header-actions { display:flex; align-items:center; gap:16px }
-#landing .hero-header-actions .button { min-height:40px; padding-inline:24px; font-size:13px }
 .hero-copy { margin-top:clamp(20px,4vh,36px); text-align:center }
 #landing .hero .eyebrow { color:#eaf6ff }
 #landing .hero h1 {
@@ -381,9 +379,7 @@
   .hero { margin:8px 8px 0; border-radius:32px 32px 0 0; padding:0 16px 24px }
   .site-header { padding:16px 0 0 }
   #landing .site-header .brand { font-size:18px }
-  .hero-header-actions { gap:8px }
-  #landing .hero-header-actions .button { min-height:34px; padding-inline:10px; font-size:11px }
-  .hero-header-actions .standard-badge { min-width:0; min-height:34px; padding:0 8px; font-size:11px; white-space:nowrap }
+  .site-header .standard-badge { min-width:0; min-height:34px; padding:0 8px; font-size:11px; white-space:nowrap }
   #landing .hero .eyebrow { font-size:10px }
   .hero-copy { margin-top:24px }
   #landing .hero h1 { font-size:clamp(28px,8.5vw,48px); line-height:1.07 }
@@ -434,15 +430,6 @@
   .site-footer nav { white-space:normal }
   .footer-bottom { flex-direction:column; gap:10px }
 }
-@media(max-width:380px) {
-  .site-header { gap:8px }
-  #landing .site-header .brand { font-size:16px }
-  .hero-header-actions { gap:6px }
-  #landing .hero-header-actions .button { padding-inline:6px; font-size:10px }
-  .hero-header-actions .button > span { display:none }
-  .hero-header-actions .standard-badge { padding-inline:6px; font-size:10px }
-}
-
 .faq-list summary { padding-block:10px; margin-block:-10px; cursor:pointer }
 .faq-list summary::after { top:10px }
 @media(max-width:700px) {
