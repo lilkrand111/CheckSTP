@@ -25,9 +25,14 @@ class BodyLimitMiddleware:
             response = JSONResponse({"detail": "Файл превышает допустимый размер."}, status_code=413)
             return await response(scope, receive, send)
         total = 0
+        body_complete = False
 
         async def limited_receive():
-            nonlocal total
+            nonlocal total, body_complete
+            if body_complete:
+                # The deadlines bound the request body only. A response may take
+                # longer: a streamed download waits here for a disconnect.
+                return await receive()
             remaining = deadline - self.clock()
             if remaining <= 0:
                 raise HTTPException(408, "Превышено общее время загрузки файла. Повторите загрузку при стабильном соединении.")
@@ -41,6 +46,9 @@ class BodyLimitMiddleware:
                 total += len(message.get("body", b""))
                 if total > self.max_bytes:
                     raise HTTPException(413, "Файл превышает допустимый размер.")
+                body_complete = not message.get("more_body", False)
+            else:
+                body_complete = True
             return message
 
         async def secured_send(message):
@@ -48,8 +56,15 @@ class BodyLimitMiddleware:
                 extra = [(b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"same-origin"),
                          (b"x-frame-options", b"DENY"),
                          (b"content-security-policy", b"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")]
-                if scope["path"].startswith("/api/"):
+                path = scope["path"]
+                if path.startswith("/api/"):
                     extra.append((b"cache-control", b"no-store"))
+                elif path.startswith("/assets/fonts/") and message["status"] in (200, 206, 304):
+                    # The font file never changes under its name.
+                    extra.append((b"cache-control", b"public, max-age=31536000, immutable"))
+                elif path.startswith("/assets/"):
+                    # Always revalidate by ETag: a release must not mix old and new modules.
+                    extra.append((b"cache-control", b"no-cache"))
                 message["headers"] = list(message.get("headers", [])) + extra
             await send(message)
 

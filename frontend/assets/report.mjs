@@ -29,7 +29,16 @@ export const PROPERTIES = {
   top_margin: "Верхнее поле", bottom_margin: "Нижнее поле", left_margin: "Левое поле", right_margin: "Правое поле",
 };
 
+// Upload errors that the same file would only repeat.
+export const PERMANENT_UPLOAD_ERRORS = [413, 415, 422];
+
+const searchCache = new WeakMap();
 export function searchableText(finding) {
+  // A search runs for every keystroke; build the text of a finding only once.
+  if (!searchCache.has(finding)) searchCache.set(finding, buildSearchableText(finding));
+  return searchCache.get(finding);
+}
+function buildSearchableText(finding) {
   return [finding.rule_id, RULES[finding.rule_id], finding.standard_reference, STATUSES[finding.status],
     finding.actual, finding.expected, ...finding.locations.flatMap(location =>
       [location.section, location.fragment_start, location.context, location.property, PROPERTIES[location.property]])]

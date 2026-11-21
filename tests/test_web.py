@@ -7,6 +7,7 @@ from io import BytesIO
 import json
 import re
 import threading
+import time
 from zipfile import ZipFile
 
 from docx import Document
@@ -193,6 +194,40 @@ def test_same_document_cannot_be_fixed_twice(client, docx_bytes, monkeypatch):
         assert future.result(timeout=15).status_code == 200
 
 
+def test_slow_download_is_not_cut_by_upload_deadlines(settings, docx_bytes, monkeypatch):
+    class SlowStream:
+        """Each read outlasts the pause allowed between parts of an upload."""
+        def __init__(self, stream):
+            self.stream = stream
+
+        @property
+        def closed(self):
+            return self.stream.closed
+
+        def read(self, size):
+            time.sleep(0.3)
+            return self.stream.read(size)
+
+        def close(self):
+            self.stream.close()
+
+    with TestClient(create_app(replace(settings, upload_idle_timeout=0.05))) as client:
+        client.headers["X-CSRF-Token"] = client.get("/api/session").json()["csrf_token"]
+        document_id = upload(client, docx_bytes).json()["document_id"]
+        assert client.post(f"/api/documents/{document_id}/fix").status_code == 200
+        service = client.app.state.service
+        begin_download = service.begin_download
+
+        def slow_download(*args):
+            metadata, stream = begin_download(*args)
+            return metadata, SlowStream(stream)
+
+        monkeypatch.setattr(service, "begin_download", slow_download)
+        response = client.get(f"/api/documents/{document_id}/download")
+        assert response.status_code == 200
+        assert response.content == (service.storage.path(document_id) / "corrected.docx").read_bytes()
+
+
 def test_timeout_kills_worker(settings, docx_bytes):
     with TestClient(create_app(replace(settings, processing_timeout=0.001))) as client:
         client.headers["X-CSRF-Token"] = client.get("/api/session").json()["csrf_token"]
@@ -351,7 +386,14 @@ def test_frontend_is_served_with_csp_and_api_stays_available(client):
                   "styles.css", "landing.css", "workspace.css", "favicon.svg",
                   "fonts/InterVariable.woff2", "images/clouds-landing.webp",
                   "images/clouds-workspace.webp", "images/clouds-footer.webp"):
-        assert client.get(f"/assets/{asset}").status_code == 200
+        response = client.get(f"/assets/{asset}")
+        assert response.status_code == 200
+        # Scripts and styles are revalidated on every load; only the font is cached for long.
+        expected = "public, max-age=31536000, immutable" if asset.startswith("fonts/") else "no-cache"
+        assert response.headers["cache-control"] == expected
+    cached = client.get("/assets/app.js", headers={"If-None-Match": client.get("/assets/app.js").headers["etag"]})
+    assert cached.status_code == 304 and cached.headers["cache-control"] == "no-cache"
+    assert "max-age" not in client.get("/assets/fonts/missing.woff2").headers.get("cache-control", "")
     for path in ("/assets/../app/security.py", "/assets/%2e%2e/storage/.session-secret", "/assets/index.html", "/storage/documents"):
         assert client.get(path).status_code == 404
     assert client.get("/static/app.js").status_code == 404

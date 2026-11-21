@@ -1,4 +1,5 @@
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+ARG NODE_IMAGE=node:22-alpine
 FROM ${PYTHON_IMAGE} AS app-base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -20,7 +21,7 @@ COPY formal_fix/ ./formal_fix/
 COPY frontend/ ./frontend/
 USER 10001:10001
 EXPOSE 8000
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--timeout-graceful-shutdown", "210", "--no-access-log"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--timeout-graceful-shutdown", "210", "--no-access-log", "--no-server-header"]
 
 FROM app-base AS test
 USER root
@@ -29,5 +30,13 @@ RUN python -m pip install --no-cache-dir -r requirements-dev.txt
 COPY tests/ ./tests/
 USER 10001:10001
 CMD ["python", "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"]
+
+# Frontend logic tests need Node only here; the runtime image stays Python-only.
+FROM ${NODE_IMAGE} AS frontend-test
+WORKDIR /app
+COPY frontend/ ./frontend/
+COPY tests/frontend.test.mjs tests/frontend-ui.test.mjs ./tests/
+USER node
+CMD ["node", "--test", "tests/frontend.test.mjs", "tests/frontend-ui.test.mjs"]
 
 FROM app-base AS runtime

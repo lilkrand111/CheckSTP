@@ -1,9 +1,11 @@
 import { DocumentAPI } from './api.mjs';
-import { markStorageKey, parseMarks, retryDelay, operationErrorMessage } from './report.mjs';
+import { markStorageKey, parseMarks, retryDelay, operationErrorMessage, PERMANENT_UPLOAD_ERRORS } from './report.mjs';
 
 export const defaultFilters = () => ({ status: 'all', category: 'all', query: '', hideDone: false });
 export const isBusy = entry => Boolean(entry?.operation || ['checking', 'fixing'].includes(entry?.data?.state));
 export const isFixing = entry => entry?.operation === 'fixing' || entry?.data?.state === 'fixing';
+// The server rejected the file itself: sending the same file again cannot help.
+export const permanentUploadError = entry => PERMANENT_UPLOAD_ERRORS.includes(entry?.errorStatus);
 
 export class DocumentStore {
   documents = new Map();
@@ -42,7 +44,8 @@ export class DocumentStore {
   }
   entry(key, filename) {
     const entry = { key, filename, data: null, operation: null, error: '', marks: new Set(), markKey: null,
-      reportScope: null, filters: defaultFilters(), selectedFinding: null, expanded: new Set(), timer: null };
+      reportScope: null, revision: 0, filters: defaultFilters(), selectedFinding: null, expanded: new Set(), timer: null,
+      errorStatus: null, uploadPercent: null, fixSummary: null };
     this.documents.set(key, entry);
     return entry;
   }
@@ -57,7 +60,7 @@ export class DocumentStore {
           entry.marks = parseMarks(this.storage.getItem(entry.markKey), data.report.findings.length);
         } catch { entry.storageUnavailable = true; }
       }
-      entry.reportScope = scope;
+      entry.reportScope = scope; entry.revision++;
     }
     entry.data = data; entry.filename = data.filename; this.changed();
   }
@@ -71,6 +74,7 @@ export class DocumentStore {
     this.changed();
   }
   async error(entry, error, upload = false) {
+    entry.errorStatus = error.status ?? null;
     entry.error = operationErrorMessage(error);
     if (error instanceof TypeError) entry.error = upload
       ? 'Соединение прервалось. Документ мог сохраниться на сервере. Повторная загрузка создаст ещё одну копию. Автоматического повтора нет.'
@@ -101,7 +105,11 @@ export class DocumentStore {
     const entry = this.entry(`upload-${++this.sequence}`, file.name);
     entry.file = file; entry.operation = 'checking';
     entry.done = (async () => {
-      try { await this.adopt(entry, await this.api.upload(file)); entry.file = null; }
+      const progress = fraction => {
+        const percent = Math.min(100, Math.floor(fraction * 100));
+        if (percent !== entry.uploadPercent) { entry.uploadPercent = percent; this.changed(); }
+      };
+      try { await this.adopt(entry, await this.api.upload(file, progress)); entry.file = null; }
       catch (error) { await this.error(entry, error, true); }
       finally { entry.operation = null; this.changed(); }
     })();
@@ -137,7 +145,10 @@ export class DocumentStore {
       await this.adopt(entry, await this.api.get(entry.data.document_id));
       if (entry.data.current_version === 'corrected') return;
       if (['checking', 'fixing'].includes(entry.data.state)) { this.poll(entry); return; }
+      const before = entry.data.report?.findings.length;
       await this.adopt(entry, await this.api.fix(entry.data.document_id));
+      // Counts of findings in the two reports, not a number of applied operations.
+      if (Number.isInteger(before) && entry.data.current_version === 'corrected' && entry.data.report) entry.fixSummary = { before, after: entry.data.report.findings.length };
     } catch (error) {
       await this.error(entry, error);
       if (entry.data && ![401, 403, 404].includes(error.status)) {

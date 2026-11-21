@@ -26,10 +26,13 @@ class Service:
         self.operations = set()
         self.reserved_bytes = 0
 
-    @asynccontextmanager
-    async def slot(self):
+    def require_free_slot(self):
         if self.slots.locked():
             raise ProcessingError("busy", "Все обработчики заняты. Повторите попытку немного позже.", 503)
+
+    @asynccontextmanager
+    async def slot(self):
+        self.require_free_slot()
         await self.slots.acquire()
         try:
             yield

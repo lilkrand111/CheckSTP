@@ -1,11 +1,22 @@
-"""Bounded, process-local token buckets for costly mutation requests."""
-from collections import OrderedDict
+"""Bounded, process-local admission of costly mutation requests by client address."""
+from collections import Counter, OrderedDict
+from contextlib import contextmanager
 from ipaddress import ip_address
 import math
 from threading import Lock
 from time import monotonic
 
 from .runner import ProcessingError
+
+
+def client_key(host):
+    # ProxyHeadersMiddleware supplies the client only for trusted peers.
+    # Never read X-Forwarded-For here. Normalize equivalent IP spellings.
+    try:
+        address = ip_address(host)
+        return str(getattr(address, "ipv4_mapped", None) or address)
+    except ValueError:
+        return host
 
 
 class RateLimiter:
@@ -18,13 +29,7 @@ class RateLimiter:
         self.lock = Lock()
 
     def check(self, host):
-        # ProxyHeadersMiddleware supplies the client only for trusted peers.
-        # Never read X-Forwarded-For here. Normalize equivalent IP spellings.
-        try:
-            address = ip_address(host)
-            key = str(getattr(address, "ipv4_mapped", None) or address)
-        except ValueError:
-            key = host
+        key = client_key(host)
         with self.lock:
             now = self.clock()
             lifetime = self.capacity / self.refill
@@ -51,3 +56,33 @@ class RateLimiter:
     def _reject(seconds):
         raise ProcessingError("rate_limited", "Слишком много запросов. Повторите действие немного позже.",
                               429, retry_after=max(1, math.ceil(seconds)))
+
+
+class ReceiveGate:
+    """Bound the upload bodies being received, apart from the processing slots.
+
+    A slow or stalled upload occupies only this gate, so it cannot keep other
+    documents from being processed. One address may receive as many bodies as
+    one tab may process (max_concurrent_jobs), a quarter of the total.
+    """
+
+    def __init__(self, settings):
+        self.per_client = settings.max_concurrent_jobs
+        self.total = 4 * settings.max_concurrent_jobs
+        self.active = Counter()
+
+    @contextmanager
+    def admit(self, host):
+        key = client_key(host)
+        if self.active[key] >= self.per_client:
+            raise ProcessingError("rate_limited", "Слишком много одновременных загрузок с вашего адреса. Дождитесь их завершения и повторите действие.",
+                                  429, retry_after=5)
+        if self.active.total() >= self.total:
+            raise ProcessingError("busy", "Сервер принимает слишком много файлов. Повторите попытку немного позже.", 503)
+        self.active[key] += 1
+        try:
+            yield
+        finally:
+            self.active[key] -= 1
+            if not self.active[key]:
+                del self.active[key]

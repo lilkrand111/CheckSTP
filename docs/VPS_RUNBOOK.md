@@ -125,9 +125,11 @@ cd /opt/normacheck
 dc build app
 sudo docker build --target test -t normacheck:test .
 sudo docker run --rm --memory 640m --memory-swap 2560m --cpus 0.9 normacheck:test
+sudo docker build --target frontend-test -t normacheck:frontend-test .
+sudo docker run --rm normacheck:frontend-test
 ```
 
-Ожидается успешное завершение Python-тестов. Образы собираются под архитектуру
+Ожидается успешное завершение Python-тестов и frontend-тестов. Образы собираются под архитектуру
 самого VPS. Основное хранилище в этих тестах не используется.
 
 Для сквозной проверки через Caddy установите служебное Python-окружение:
@@ -302,6 +304,7 @@ free -h
 sudo du -sh /var/lib/normacheck/storage
 ```
 
+Журнал запросов с кодами ответов пишет Caddy: `dc logs --tail 100 caddy`.
 Следите за диском, OOM, перезапусками и частыми 503/504. Логи уже ограничены
 в Compose. Первоначальный бюджет документов — 2048 МиБ; 507 может означать
 достижение этого бюджета, даже если SSD ещё свободен. Документы для освобождения

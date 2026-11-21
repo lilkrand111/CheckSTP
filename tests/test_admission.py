@@ -11,7 +11,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.config import Settings
 from app.main import create_app
-from app.rate_limit import RateLimiter
+from app.rate_limit import RateLimiter, ReceiveGate
 from app.runner import ProcessingError
 
 
@@ -183,6 +183,115 @@ def test_interrupted_multipart_closes_spooled_file_and_releases_slot(settings, m
                     async with service.slot():
                         pytest.fail("A third slot must not be available")
                 assert busy.value.status_code == 503
+
+    asyncio.run(exercise())
+
+
+def multipart(data, *, closed=True):
+    body = b'--test\r\nContent-Disposition: form-data; name="file"; filename="test.docx"\r\n\r\n' + data
+    return body + b"\r\n--test--\r\n" if closed else body
+
+
+async def post_upload(application, host, receive):
+    """Send one upload straight to the ASGI app and return the response status."""
+    owner = secrets.token_urlsafe(32)
+    sessions = application.state.sessions
+    cookie = "docx_session=" + sessions.serializer.dumps(owner)
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+             "method": "POST", "scheme": "http", "path": "/api/documents", "query_string": b"",
+             "headers": [(b"host", b"testserver"), (b"content-type", b"multipart/form-data; boundary=test"),
+                         (b"cookie", cookie.encode()), (b"x-csrf-token", sessions.token(owner).encode())],
+             "client": (host, 123), "server": ("testserver", 80)}
+    output = []
+
+    async def send(message):
+        output.append(message)
+
+    await application(scope, receive, send)
+    return next(item["status"] for item in output if item["type"] == "http.response.start")
+
+
+def test_receive_gate_bounds_one_address_and_the_total(settings):
+    gate = ReceiveGate(replace(settings, max_concurrent_jobs=1))
+    with gate.admit("192.0.2.1"):
+        with pytest.raises(ProcessingError) as same_address:
+            with gate.admit("::ffff:192.0.2.1"):
+                pytest.fail("One address must not exceed its share")
+        assert same_address.value.status_code == 429 and same_address.value.retry_after == 5
+        with gate.admit("192.0.2.2"), gate.admit("192.0.2.3"), gate.admit("192.0.2.4"):
+            with pytest.raises(ProcessingError) as full:
+                with gate.admit("192.0.2.5"):
+                    pytest.fail("The total must stay bounded")
+            assert full.value.status_code == 503
+    assert not gate.active
+
+
+def test_stalled_uploads_hold_no_processing_slot(settings):
+    from starlette.requests import ClientDisconnect
+
+    async def exercise():
+        application = create_app(settings)
+        async with application.router.lifespan_context(application):
+            service, gate = application.state.service, application.state.receive_gate
+            release = asyncio.Event()
+
+            def stalled():
+                started = False
+
+                async def receive():
+                    nonlocal started
+                    if not started:
+                        started = True
+                        return {"type": "http.request", "body": multipart(b"PK", closed=False), "more_body": True}
+                    await release.wait()
+                    return {"type": "http.disconnect"}
+                return receive
+
+            async def complete():
+                return {"type": "http.request", "body": multipart(payload()), "more_body": False}
+
+            # One address stalls as many uploads as there are processing slots.
+            tasks = [asyncio.create_task(post_upload(application, "192.0.2.1", stalled()))
+                     for _ in range(settings.max_concurrent_jobs)]
+            for _ in range(500):
+                if gate.active.total() == len(tasks):
+                    break
+                await asyncio.sleep(0.01)
+            assert gate.active.total() == len(tasks)
+            assert not service.slots.locked()
+            assert await post_upload(application, "192.0.2.1", complete) == 429
+            assert await post_upload(application, "192.0.2.2", complete) == 201
+            assert len(list(service.storage.documents.iterdir())) == 1
+            release.set()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            assert all(isinstance(result, ClientDisconnect) for result in results)
+            assert not gate.active
+            assert len(list(service.storage.documents.iterdir())) == 1
+
+    asyncio.run(exercise())
+
+
+def test_busy_workers_after_receiving_reject_without_storing(settings):
+    async def exercise():
+        application = create_app(settings)
+        async with application.router.lifespan_context(application):
+            service = application.state.service
+
+            async def receive():
+                return {"type": "http.request", "body": multipart(payload()), "more_body": False}
+
+            async def receive_while_workers_fill():
+                # Every worker becomes busy only after this request was admitted.
+                for _ in range(settings.max_concurrent_jobs):
+                    await service.slots.acquire()
+                return await receive()
+
+            assert await post_upload(application, "192.0.2.1", receive_while_workers_fill) == 503
+            assert not list(service.storage.documents.iterdir())
+            assert not application.state.receive_gate.active
+            for _ in range(settings.max_concurrent_jobs):
+                service.slots.release()
+            assert await post_upload(application, "192.0.2.1", receive) == 201
 
     asyncio.run(exercise())
 

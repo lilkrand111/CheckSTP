@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DocumentAPI } from "../frontend/assets/api.mjs";
 import { filteredFindings, markStorageKey, parseMarks, readResponse, retryDelay, operationErrorMessage } from "../frontend/assets/report.mjs";
 
 const findings = [
@@ -53,4 +54,40 @@ test("mutation errors distinguish rate limits, upload and processing timeouts", 
     assert.equal(retryDelay({ status: 429, retryAfter }), 5);
   }
   assert.equal(retryDelay({ status: 408, retryAfter: 7 }), 0);
+});
+
+test("upload reports progress, sends the CSRF token and keeps the error contract", async () => {
+  const sent = [];
+  class FakeRequest {
+    constructor() { this.listeners = {}; this.headers = {}; this.upload = { addEventListener: (name, fn) => { this.listeners["upload." + name] = fn; } }; sent.push(this); }
+    open(method, path) { this.method = method; this.path = path; }
+    setRequestHeader(name, value) { this.headers[name] = value; }
+    addEventListener(name, fn) { this.listeners[name] = fn; }
+    getResponseHeader(name) { return name === "Retry-After" ? "9" : null; }
+    send(body) { this.body = body; }
+    answer(status, text) { this.status = status; this.responseText = text; this.listeners.load(); }
+  }
+  const original = globalThis.XMLHttpRequest;
+  globalThis.XMLHttpRequest = FakeRequest;
+  try {
+    const api = new DocumentAPI();
+    await assert.rejects(api.upload(new File(["x"], "a.docx")), /Подключитесь/);
+    api.session = { csrf_token: "token" };
+    const progress = [];
+    const done = api.upload(new File(["x"], "a.docx"), value => progress.push(value));
+    const request = sent.at(-1);
+    assert.deepEqual([request.method, request.path, request.headers["X-CSRF-Token"]], ["POST", "/api/documents", "token"]);
+    assert.ok(request.body instanceof FormData); assert.equal("Content-Type" in request.headers, false);
+    request.listeners["upload.progress"]({ lengthComputable: true, loaded: 1, total: 4 });
+    request.listeners["upload.progress"]({ lengthComputable: false, loaded: 3, total: 0 });
+    request.listeners["upload.load"]();
+    request.answer(201, '{"document_id":"one"}');
+    assert.deepEqual(await done, { document_id: "one" }); assert.deepEqual(progress, [0.25, 1]);
+    const rejected = api.upload(new File(["x"], "a.docx"));
+    sent.at(-1).answer(503, '{"error":{"code":"busy","message":"Заняты"}}');
+    await assert.rejects(rejected, error => error.status === 503 && error.code === "busy" && error.retryAfter === 9);
+    const dropped = api.upload(new File(["x"], "a.docx"));
+    sent.at(-1).listeners.error();
+    await assert.rejects(dropped, TypeError);
+  } finally { globalThis.XMLHttpRequest = original; }
 });

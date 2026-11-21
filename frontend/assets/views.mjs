@@ -2,6 +2,8 @@ import { STATUSES, RULES, PROPERTIES, filteredFindings } from './report.mjs';
 import { isFixing } from './documents.mjs';
 
 export const $ = id => document.getElementById(id);
+// The list is drawn in portions: a long report must not build thousands of rows at once.
+export const LIST_STEP = 200;
 export function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -26,6 +28,22 @@ function checkbox(entry, index, onMark, label) {
   input.setAttribute('aria-label', `Исправлено вручную: ${RULES[entry.data.report.findings[index].rule_id] || entry.data.report.findings[index].rule_id}, замечание ${index + 1}`);
   input.addEventListener('change', () => onMark(index, input.checked));
   return input;
+}
+// One line that tells similar rows apart: where the finding is in the document.
+function placeText(finding) {
+  const location = finding.locations[0];
+  const text = (location?.fragment_start || location?.context || location?.section || '').replace(/\s+/g, ' ').trim();
+  return text.length > 90 ? text.slice(0, 90) + '…' : text;
+}
+// Arrow keys move between rows; Tab then reaches the detail and the actions in a few steps.
+export function moveListFocus(event) {
+  const step = { ArrowDown: 1, ArrowUp: -1, Home: -Infinity, End: Infinity }[event.key];
+  const control = event.target, row = control?.parentElement;
+  if (!step || event.altKey || event.ctrlKey || event.metaKey || !row?.classList?.contains('finding-row')) return;
+  const rows = [...$('findings').children].filter(node => node.classList.contains('finding-row'));
+  const target = rows[Math.max(0, Math.min(rows.length - 1, rows.indexOf(row) + step))];
+  event.preventDefault();
+  if (target && target !== row) target.querySelector(control.matches('input') ? 'input' : '.finding-select')?.focus();
 }
 function locationBlock(location) {
   const block = element('div', 'location');
@@ -65,7 +83,7 @@ function fillDetail(entry, finding, index, onMark) {
   }
   detail.append(element('p', 'reference', `Основание: ${finding.standard_reference}`));
 }
-function countText(count, one, few, many) {
+export function countText(count, one, few, many) {
   const tens = count % 100, units = count % 10;
   return `${count} ${units === 1 && tens !== 11 ? one : units >= 2 && units <= 4 && (tens < 12 || tens > 14) ? few : many}`;
 }
@@ -86,8 +104,13 @@ function conditionsText({ query, category, status }) {
   const names = parts.map(([name]) => name);
   return `${capitalize(names.slice(0, -1).join(', '))} и ${names.at(-1)} применены вместе. Измените условия или сбросьте их.`;
 }
-export function renderReport(entry, { onSelect, onMark, mobile }) {
+export function renderReport(entry, { onSelect, onMark, onMore, mobile }) {
   const { findings, visible, hiddenByMarks } = reportSelection(entry);
+  const listKey = JSON.stringify([entry.revision, entry.filters]);
+  if (entry.listKey !== listKey || !entry.listLimit) { entry.listKey = listKey; entry.listLimit = LIST_STEP; }
+  const selectedPosition = visible.findIndex(item => item.index === entry.selectedFinding);
+  if (selectedPosition >= entry.listLimit) entry.listLimit = (Math.floor(selectedPosition / LIST_STEP) + 1) * LIST_STEP;
+  const shown = visible.slice(0, entry.listLimit);
   $('count-all').textContent = findings.length;
   for (const status of Object.keys(STATUSES)) $('count-' + status).textContent = findings.filter(f => f.status === status).length;
   const rules = [...new Set(findings.map(f => f.rule_id))].sort();
@@ -114,30 +137,46 @@ export function renderReport(entry, { onSelect, onMark, mobile }) {
     const counts = statusCounts(findings);
     $('empty-summary').textContent = !findings.length ? counts : `${entry.data.current_version === 'corrected' ? 'Отчёт исправленной копии' : 'Исходный отчёт'}: ${countText(findings.length, 'замечание', 'замечания', 'замечаний')} · ${counts}`;
   }
-  const signature = JSON.stringify([entry.key, entry.reportScope, entry.selectedFinding, entry.filters, [...entry.marks], isFixing(entry), mobile]);
+  const signature = JSON.stringify([entry.key, entry.revision, entry.selectedFinding, entry.filters, [...entry.marks], isFixing(entry), mobile, entry.listLimit]);
   const selection = { findings, visible, hiddenByMarks };
   if ($('findings')._signature === signature) return selection;
   const focusKey = document.activeElement?.dataset?.focus;
-  const scroll = $('findings').scrollTop;
+  // A new report or new search conditions start from the top of the list.
+  const scroll = $('findings')._listKey === entry.key + listKey ? $('findings').scrollTop : 0;
+  $('findings')._listKey = entry.key + listKey;
   const detail = $('finding-detail');
   const detailSelection = `${entry.key}:${entry.selectedFinding}`;
   const detailScroll = detail._selection === detailSelection ? detail.scrollTop : 0;
   // Keep the single detail panel alive when moving between desktop and inline mobile layout.
   $('details-slot').append($('finding-detail'));
   $('findings').replaceChildren();
-  for (const { finding, index } of visible) {
-    const row = element('div', 'finding-row'); row.classList.toggle('active', index === entry.selectedFinding);
+  for (const { finding, index } of shown) {
+    const current = index === entry.selectedFinding;
+    const row = element('div', 'finding-row'); row.classList.toggle('active', current);
     const button = element('button', 'finding-select'); button.type = 'button'; button.dataset.focus = `select-${index}`;
-    button.setAttribute('aria-current', index === entry.selectedFinding ? 'true' : 'false');
+    button.setAttribute('aria-current', current ? 'true' : 'false');
     button.setAttribute('aria-controls', 'finding-detail');
     if (mobile) button.setAttribute('aria-expanded', String(index === entry.selectedFinding));
     button.append(element('strong', '', RULES[finding.rule_id] || finding.rule_id), element('small', `status-${finding.status}`, `${finding.rule_id} · ${STATUSES[finding.status] || finding.status}`));
+    const place = placeText(finding);
+    if (place) button.append(element('span', 'finding-place', place));
     button.addEventListener('click', () => onSelect(index));
-    row.append(checkbox(entry, index, onMark, 'list'), button); $('findings').append(row);
+    const mark = checkbox(entry, index, onMark, 'list');
+    // Only the selected row is a Tab stop; the other rows are reached with the arrow keys.
+    mark.tabIndex = button.tabIndex = current ? 0 : -1;
+    row.append(mark, button); $('findings').append(row);
     if (entry.selectedFinding === index) {
       fillDetail(entry, finding, index, onMark);
       if (mobile) row.append($('finding-detail'));
     }
+  }
+  if (shown.length < visible.length) {
+    const rest = visible.length - shown.length;
+    const more = element('button', 'more-findings', `Показать ещё ${Math.min(LIST_STEP, rest)} из ${rest}`); more.type = 'button';
+    // After the redraw the focus lands on the first of the added rows.
+    more.dataset.focus = `select-${visible[shown.length].index}`;
+    more.addEventListener('click', () => { entry.listLimit += LIST_STEP; onMore(); });
+    $('findings').append(more);
   }
   if (!visible.length) $('finding-detail').replaceChildren();
   $('findings').scrollTop = scroll;

@@ -11,7 +11,7 @@ from starlette.staticfiles import StaticFiles
 
 from .config import Settings
 from .middleware import BodyLimitMiddleware
-from .rate_limit import RateLimiter
+from .rate_limit import RateLimiter, ReceiveGate
 from .routes import router
 from .runner import ProcessingError
 from .security import Sessions
@@ -32,6 +32,7 @@ def create_app(settings=None):
             application.state.service = service
             application.state.sessions = Sessions(settings.secret or service.storage.local_secret())
             application.state.rate_limiter = RateLimiter(settings)
+            application.state.receive_gate = ReceiveGate(settings)
             try:
                 yield
             finally:

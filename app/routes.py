@@ -41,15 +41,23 @@ async def session(request: Request):
 })
 async def upload(request: Request):
     owner = request.app.state.sessions.authorize_mutation(request)
-    request.app.state.rate_limiter.check(request.client.host if request.client else "unknown")
+    host = request.client.host if request.client else "unknown"
+    request.app.state.rate_limiter.check(host)
     service = request.app.state.service
-    async with service.slot():
-        # Admission happens before multipart parsing, including its disk spooling.
-        async with request.form(max_files=1, max_fields=0, max_part_size=1024 * 1024) as form:
-            file = form.get("file")
-            if not isinstance(file, UploadFile) or len(form.multi_items()) != 1:
-                raise ProcessingError("missing_file", "Выберите один DOCX-файл.", 422)
+    # Admission happens before multipart parsing, including its disk spooling.
+    # No body is read while every worker is busy, but a processing slot is taken
+    # only after the body has arrived: a stalled upload must not hold one.
+    service.require_free_slot()
+    with request.app.state.receive_gate.admit(host):
+        form = await request.form(max_files=1, max_fields=0, max_part_size=1024 * 1024)
+    try:
+        file = form.get("file")
+        if not isinstance(file, UploadFile) or len(form.multi_items()) != 1:
+            raise ProcessingError("missing_file", "Выберите один DOCX-файл.", 422)
+        async with service.slot():
             return await service.upload(file, owner)
+    finally:
+        await form.close()
 
 
 @router.get("/api/documents/{document_id}")

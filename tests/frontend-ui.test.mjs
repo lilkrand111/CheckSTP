@@ -1,7 +1,7 @@
 // State transitions used by the UI; all documents and network responses are synthetic.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DocumentStore, isBusy } from '../frontend/assets/documents.mjs';
+import { DocumentStore, isBusy, permanentUploadError } from '../frontend/assets/documents.mjs';
 import { DocumentAPI } from '../frontend/assets/api.mjs';
 import { reportSelection } from '../frontend/assets/views.mjs';
 
@@ -59,6 +59,26 @@ test('manual marks survive the same report and failed fix, but reset for the cor
   shouldFail = false; await store.fix(entry);
   assert.equal(entry.data.current_version, 'corrected'); assert.equal(entry.marks.size, 0); assert.equal(entry.filters.query, '');
   assert.equal(entry.data.download_url, '/api/documents/one/download'); store.dispose();
+});
+
+test('fix remembers report sizes; a rejected file is not offered for a retry', async () => {
+  const store = setup({ async fix(id) { return { ...data(id, 'corrected'), report: { standard: 'СТП 01–2017', findings: [findings[1]] } }; } });
+  const entry = store.entry('one', 'one.docx'); await store.adopt(entry, data());
+  assert.equal(entry.fixSummary, null);
+  await store.fix(entry);
+  assert.deepEqual(entry.fixSummary, { before: 2, after: 1 });
+  for (const [status, permanent] of [[413, true], [415, true], [422, true], [503, false], [undefined, false]]) {
+    const rejecting = setup({ async upload() { throw Object.assign(status ? new Error('Отказ') : new TypeError('offline'), { status }); } });
+    const failed = rejecting.upload(file()); await failed.done;
+    assert.equal(permanentUploadError(failed), permanent); assert.ok(failed.file); rejecting.dispose();
+  }
+  const percents = [];
+  const progress = setup({ async upload(_, report) { for (const part of [0, 0.004, 0.5, 0.509, 1]) report(part); return data(); } });
+  progress.changed = () => percents.push([...progress.documents.values()][0]?.uploadPercent);
+  await progress.upload(file()).done;
+  // The screen is redrawn once per whole percent, not for every network event.
+  assert.deepEqual(percents.filter((value, index) => value !== percents[index - 1]), [0, 50, 100]);
+  store.dispose(); progress.dispose();
 });
 
 test('fix preflight prevents duplicate mutation when another tab has finished', async () => {
@@ -124,6 +144,7 @@ test('actual app separates file choice from POST, preserves the selected documen
     constructor() { this.children = []; this.listeners = new Map(); this.dataset = {}; this.value = ''; this.hidden = false; this.scrollTop = 0; this.classList = { toggle() {}, add() {}, remove() {} }; }
     setAttribute() {}
     addEventListener(name, callback) { this.listeners.set(name, callback); }
+    get parentElement() { return this.parent; }
     append(...nodes) { for (const node of nodes) { node.remove?.(); node.parent = this; this.children.push(node); } }
     replaceChildren(...nodes) { for (const child of this.children) child.parent = null; this.children = []; this.append(...nodes); }
     remove() { if (this.parent) this.parent.children = this.parent.children.filter(n => n !== this); this.parent = null; }
@@ -136,9 +157,11 @@ test('actual app separates file choice from POST, preserves the selected documen
   const get = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
   const location = { href: 'http://localhost/' }, events = new Map(), pending = deferred();
   const requests = [], uploaded = data('00000000-0000-4000-8000-000000000001'); let timer = 0;
+  const long = { ...data('00000000-0000-4000-8000-000000000002'), report: { standard: 'СТП 01–2017', findings: Array.from({ length: 450 }, (_, i) => ({ ...findings[0], locations: [{ section: 'Раздел', fragment_start: `Абзац\n${i}` }] })) } };
   try {
     Object.assign(globalThis, {
-      document: { body: new Element(), activeElement: null, getElementById: get, createElement: () => new Element(), querySelectorAll: () => [] },
+      document: { body: new Element(), activeElement: null, getElementById: get, createElement: () => new Element(),
+        querySelectorAll: selector => selector === '[data-check]' ? [get('new-document')] : [] },
       window: { localStorage: { getItem: () => null, setItem() {} }, matchMedia: () => ({ matches: false, addEventListener() {} }), addEventListener: (name, fn) => events.set(name, fn), scrollTo() {} },
       location, history: { pushState(_, __, url) { location.href = String(url); }, replaceState(_, __, url) { location.href = String(url); } },
       setTimeout() { return ++timer; }, clearTimeout() {},
@@ -146,15 +169,25 @@ test('actual app separates file choice from POST, preserves the selected documen
         requests.push({ path, method: init.method || 'GET' });
         if (path === '/api/session') return new Response(JSON.stringify({ csrf_token: 'token', max_upload_bytes: 1024, max_concurrent_jobs: 2 }));
         if (path === '/api/documents') return new Response(JSON.stringify(await pending.promise), { status: 201 });
-        return new Response(JSON.stringify(uploaded));
+        return new Response(JSON.stringify(path.endsWith(long.document_id) ? long : uploaded));
       },
     });
     let source = await readFile(new URL('../frontend/assets/app.js', import.meta.url), 'utf8');
     for (const file of ['documents.mjs', 'views.mjs']) source = source.replace(new RegExp(`'\\./${file}(?:\\?[^']*)?'`), JSON.stringify(new URL(`../frontend/assets/${file}`, import.meta.url).href));
     await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+    assert.equal(get('landing').hidden, false);
+    assert.equal(get('start-check').disabled, true);
     await get('file-input').fire('change', { target: { files: [file()], value: '' } });
     assert.equal(get('start-check').disabled, false); assert.equal(requests.filter(r => r.method === 'POST').length, 0);
-    assert.equal(new URL(location.href).hash, '#check');
+    assert.equal(get('landing').hidden, false);
+    assert.equal(location.href, 'http://localhost/');
+    const replacement = new File(['replacement'], 'другая курсовая.docx');
+    await get('hero').fire('drop', { preventDefault() {}, dataTransfer: { types: ['Files'], files: [replacement] } });
+    assert.equal(get('selected-filename').textContent, replacement.name);
+    assert.equal(requests.filter(r => r.method === 'POST').length, 0);
+    location.href = 'http://localhost/#check'; await events.get('hashchange')();
+    assert.equal(get('landing').hidden, false);
+    assert.equal(get('feedback').parentElement, get('check-messages'));
     await get('start-check').fire('click');
     assert.equal(requests.filter(r => r.method === 'POST').length, 1); assert.equal(get('report').hidden, true);
     assert.match(get('document-title').textContent, /Проверяем/);
@@ -164,6 +197,10 @@ test('actual app separates file choice from POST, preserves the selected documen
     assert.equal(get('landing').hidden, false); assert.equal(location.href, 'http://localhost/');
     location.href = `http://localhost/?document=${uploaded.document_id}`; await events.get('popstate')(); for (let i = 0; i < 15; i++) await setImmediate();
     assert.equal(get('report').hidden, false); assert.equal(get('count-all').textContent, 2);
+    assert.equal(get('document-name').textContent, uploaded.filename); assert.equal(document.title, `${uploaded.filename} · NormaCheck`);
+    // Each row names its place, so equal rules stay distinguishable.
+    assert.equal(get('findings').children[0].children[1].children[2].textContent, 'Первый абзац');
+    assert.equal(get('findings').children[1].children[1].children.length, 2);
     assert.equal(new URL(location.href).searchParams.get('document'), uploaded.document_id);
     get('finding-detail').scrollTop = 120;
     const firstMark = get('findings').children[0].children[0];
@@ -178,7 +215,23 @@ test('actual app separates file choice from POST, preserves the selected documen
     await get('reset-filters').fire('click'); assert.equal(get('empty').hidden, true);
     location.href = `http://localhost/?document=${uploaded.document_id}`; await events.get('popstate')();
     assert.equal(requests.at(-1).path, `/api/documents/${uploaded.document_id}`);
+    // A long report is drawn in portions of 200 rows.
+    location.href = `http://localhost/?document=${long.document_id}`; await events.get('popstate')(); for (let i = 0; i < 15; i++) await setImmediate();
+    assert.equal(get('count-all').textContent, 450); assert.equal(get('findings').children.length, 201);
+    assert.equal(get('findings').children[0].children[1].children[2].textContent, 'Абзац 0');
+    assert.equal(get('findings').children.at(-1).textContent, 'Показать ещё 200 из 250');
+    await get('findings').children.at(-1).fire('click');
+    assert.equal(get('findings').children.length, 401); assert.equal(get('findings').children.at(-1).textContent, 'Показать ещё 50 из 50');
+    await get('findings').children.at(-1).fire('click');
+    assert.equal(get('findings').children.length, 450);
+    await get('search').fire('input', { target: { value: 'Абзац' } });
+    assert.equal(get('findings').children.length, 201);
+    await get('new-document').fire('click', { preventDefault() {} });
+    assert.equal(location.href, 'http://localhost/#check');
+    assert.equal(get('landing').hidden, false);
+    assert.equal(document.activeElement, get('check'));
     location.href = 'http://localhost/?document=invalid'; await events.get('popstate')();
+    assert.equal(location.href, 'http://localhost/#check');
     assert.match(get('global-message').textContent, /некорректный идентификатор/);
     assert.equal(requests.filter(r => r.method === 'POST').length, 1);
   } finally {
