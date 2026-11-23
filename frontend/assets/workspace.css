@@ -79,12 +79,6 @@
   display:flex;
   margin:18px auto
 }
-.waiting-eyebrow {
-  font-size:12px;
-  line-height:1.4;
-  letter-spacing:-.01em;
-  color:#eaf6ff
-}
 /* Отчёт по itog.fig (экраны 03–11, 13): стеклянный стол, три колонки, без заголовка и счётчиков. */
 .report-heading {
   position:absolute;
@@ -93,9 +87,6 @@
   overflow:hidden;
   clip-path:inset(50%);
   white-space:nowrap
-}
-.waiting-eyebrow {
-  display:none
 }
 .report-counts {
   display:flex;
@@ -113,15 +104,11 @@
   text-align:center;
   padding:60px 24px 0
 }
-.report-waiting .waiting-eyebrow {
-  display:block
-}
 .report-waiting .report-heading h1 {
   font-size:60px;
   font-weight:500;
   line-height:1.08;
-  letter-spacing:-.01em;
-  margin-top:41px
+  letter-spacing:-.01em
 }
 .report-waiting .report-heading>#document-state {
   font-size:16px;
@@ -895,9 +882,6 @@
     min-height:40px;
     max-width:175px
   }
-  .waiting-eyebrow {
-    font-size:9px
-  }
   .report-desk {
     padding:16px 12px;
     border-radius:24px
@@ -1038,8 +1022,7 @@
     padding:28px 4px 0
   }
   .report-waiting .report-heading h1 {
-    font-size:clamp(32px,8.5vw,44px);
-    margin-top:24px
+    font-size:clamp(32px,8.5vw,44px)
   }
   .report-waiting .report-heading>#document-state {
     font-size:14px;
@@ -1068,15 +1051,11 @@
   flex-shrink:0
 }
 @media(min-width:651px) {
-  .waiting-eyebrow {
-    font-size:clamp(10px,1.4vh,12px)
-  }
   .report-waiting .report-heading {
     padding-top:clamp(8px,2.5vh,32px)
   }
   .report-waiting .report-heading h1 {
-    font-size:clamp(30px,min(calc(7.6vh - 8px),5vw),60px);
-    margin-top:clamp(8px,3.6vh,41px)
+    font-size:clamp(30px,min(calc(7.6vh - 8px),5vw),60px)
   }
   .report-waiting .report-heading>#document-state {
     font-size:clamp(14px,1.8vh,16px);

@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="CheckSTP проверяет оформление курсовых и технической документации по СТП 01–2017: понятные замечания и исправленная копия документа.">
   <meta name="theme-color" content="#087fcc">
-  <title>CheckSTP: оформление без лишнего шума</title>
+  <title>Проверка оформления по СТП · CheckSTP</title>
   <link rel="icon" href="/assets/favicon.svg?v=20261121.2" type="image/svg+xml">
   <link rel="preload" href="/assets/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/assets/styles.css?v=20261111.1">
-  <link rel="stylesheet" href="/assets/landing.css?v=20261121.3">
-  <link rel="stylesheet" href="/assets/workspace.css?v=20261121.1">
+  <link rel="stylesheet" href="/assets/landing.css?v=20261123.4">
+  <link rel="stylesheet" href="/assets/workspace.css?v=20261123.1">
   <script type="module" src="/assets/app.js?v=20261121.3"></script>
 </head>
 <body>
@@ -23,10 +23,8 @@
           <span class="standard-badge">СТП 01–2017</span>
         </header>
         <div class="hero-copy">
-          <p class="eyebrow">Документ в фокусе. Остальное проще.</p>
-          <h1 id="hero-title">Оформление<br>без лишнего шума.</h1>
+          <h1 id="hero-title">Проверка оформления по СТП</h1>
           <p class="hero-description">Проверяем оформление курсовых и технической документации по СТП. Понятные замечания и исправленная копия документа.</p>
-          <p class="hero-caption">Профиль: СТП · Исходный файл не меняется</p>
         </div>
         <div id="check" class="upload-card" role="group" aria-label="Загрузка DOCX" tabindex="-1">
           <div id="upload-zone" class="upload-zone">
@@ -77,7 +75,7 @@
           <div id="pause-message" class="notice" role="status" hidden></div>
         </div>
       </div>
-      <section id="workspace" hidden aria-labelledby="document-title"><div class="report-heading"><p class="eyebrow waiting-eyebrow">Документ в фокусе. Остальное проще.</p><h1 id="document-title" tabindex="-1">Проверяем документ</h1><p id="document-state" role="status"></p><div id="report-counts" class="report-counts" hidden><span><b id="count-all">0</b> замечаний</span><span><b id="count-error">0</b> ошибок</span><span><b id="count-review">0</b> ручных проверок</span><span><b id="count-recommendation">0</b> рекомендаций</span></div></div>
+      <section id="workspace" hidden aria-labelledby="document-title"><div class="report-heading"><h1 id="document-title" tabindex="-1">Проверяем документ</h1><p id="document-state" role="status"></p><div id="report-counts" class="report-counts" hidden><span><b id="count-all">0</b> замечаний</span><span><b id="count-error">0</b> ошибок</span><span><b id="count-review">0</b> ручных проверок</span><span><b id="count-recommendation">0</b> рекомендаций</span></div></div>
         <div id="document-message" class="notice error-notice" role="alert" hidden></div><div id="recovery-actions" class="recovery-actions"><button id="refresh" class="button glass" type="button" hidden>Обновить статус</button><button id="retry-upload" class="button lime" type="button" hidden>Повторить загрузку вручную</button><a id="choose-again" class="button glass" href="/#check" data-check hidden>Выбрать другой DOCX</a></div>
         <div id="waiting" class="waiting-panel" hidden><p id="waiting-filename"></p><p id="waiting-meta"></p><span id="waiting-spinner" class="spinner" aria-hidden="true"></span><h2 id="waiting-title">Проверка выполняется</h2><p id="waiting-note">Результат откроется на этой странице. Исходный файл не меняется.</p><button id="waiting-button" class="button" type="button" disabled>Проверяем документ…</button></div>
         <div id="report" class="report-panel" hidden>
